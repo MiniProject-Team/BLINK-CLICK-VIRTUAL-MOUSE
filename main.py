@@ -1,225 +1,297 @@
+# -*- coding: utf-8 -*-
 """
-Blink-Click Virtual Mouse – Final Version
----------------------------------------
-Features:
-✔ Cursor moves using eye iris movement
-✔ Left click → Long blink
-✔ Right click → Double long blink
-✔ Colorful camera view
-✔ Lighting enhancement
-✔ Noise reduction
-✔ Increased cursor sensitivity
-✔ Smooth cursor control
-✔ Eye-fatigue rest reminder
+main.py  –  Blink-Click Virtual Mouse (Accessibility Edition)
+═════════════════════════════════════════════════════════════
+Entry point that wires together:
+  • mouse_controller  – head-tracking cursor, blink/dwell clicks, HUD
+  • speech_controller – voice recognition, TTS assistant, command processing
 
-Press ESC to exit
+Run:
+    python main.py
+
+Press ESC to exit at any time.
 """
+
+from __future__ import annotations
 
 import cv2
+import logging
+import sys
 import time
-import math
-import mediapipe as mp
+from typing import Optional
+
 import pyautogui
 
+# ── Project modules ──────────────────────────────────────────────
+from mouse_controller import (
+    BlinkDetector,
+    CameraCapture,
+    DwellClicker,
+    FaceMeshProcessor,
+    HeadTracker,
+    MouseConfig,
+    compute_eye_aspect_ratio,
+    draw_click_feedback,
+    draw_dwell_arc,
+    draw_ear_bar,
+    draw_no_face_warning,
+    draw_nose_marker,
+    draw_rest_reminder,
+    draw_status_panel,
+    draw_voice_status,
+)
+from speech_controller import (
+    SR_AVAILABLE,
+    TTS_AVAILABLE,
+    AssistantVoice,
+    VoiceController,
+    process_voice_command,
+)
 
-# -----------------------------
-# Utility Functions
-# -----------------------------
-def distance(p1, p2):
-    return math.hypot(p1[0] - p2[0], p1[1] - p2[1])
+# ── Logging setup ────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(name)-22s  %(levelname)-7s  %(message)s",
+    datefmt="%H:%M:%S",
+)
+logger = logging.getLogger("main")
 
 
-def get_point(landmarks, index, w, h):
-    return (
-        int(landmarks[index].x * w),
-        int(landmarks[index].y * h)
-    )
+# ================================================================
+#  STARTUP BANNER
+# ================================================================
+def _print_banner(
+    assistant: Optional[AssistantVoice],
+    voice: Optional[VoiceController],
+    cfg: MouseConfig,
+) -> None:
+    print("\n" + "═" * 62)
+    print("   BLINK-CLICK VIRTUAL MOUSE  –  Accessibility Edition")
+    print("═" * 62)
+    print(f"  TTS        : {'Active  (will speak back)' if assistant else 'Disabled'}")
+    print(f"  Voice In   : {'Active  (say help)' if voice else 'Disabled'}")
+    print( "  Cursor     : Head tracking (nose position)")
+    print(f"  Blink Click: EAR threshold {cfg.blink_threshold}")
+    print(f"  Dwell Click: hold still {cfg.dwell_time:.1f}s")
+    print( "  Press ESC to exit")
+    print("═" * 62 + "\n")
 
 
-def eye_aspect_ratio(landmarks, w, h, top, bottom, left, right):
-    t = get_point(landmarks, top, w, h)
-    b = get_point(landmarks, bottom, w, h)
-    l = get_point(landmarks, left, w, h)
-    r = get_point(landmarks, right, w, h)
-
-    vertical = distance(t, b)
-    horizontal = distance(l, r)
-
-    if horizontal == 0:
-        return 1
-
-    return vertical / horizontal
-
-
-# -----------------------------
-# Main Program
-# -----------------------------
-def main():
+# ================================================================
+#  MAIN LOOP
+# ================================================================
+def main() -> None:
+    # ── Configuration ────────────────────────────────────────────
+    cfg = MouseConfig()
 
     pyautogui.FAILSAFE = False
-    screen_w, screen_h = pyautogui.size()
+    pyautogui.PAUSE = 0
 
-    cap = cv2.VideoCapture(0)
+    # ── TTS Assistant ────────────────────────────────────────────
+    assistant: Optional[AssistantVoice] = None
+    if TTS_AVAILABLE:
+        assistant = AssistantVoice()
+        assistant.greet()
+    else:
+        logger.warning("pyttsx3 not found – TTS disabled. pip install pyttsx3")
 
-    mp_face_mesh = mp.solutions.face_mesh
-    face_mesh = mp_face_mesh.FaceMesh(refine_landmarks=True)
+    # ── Camera ───────────────────────────────────────────────────
+    cam = CameraCapture(cfg)
 
-    # Iris landmarks
-    LEFT_IRIS = [474, 475, 476, 477]
-    RIGHT_IRIS = [469, 470, 471, 472]
+    # ── MediaPipe Face Mesh ──────────────────────────────────────
+    face_mesh = FaceMeshProcessor(cfg)
 
-    # Eye blink landmarks
-    L_TOP, L_BOTTOM, L_LEFT, L_RIGHT = 159, 145, 33, 133
-    R_TOP, R_BOTTOM, R_LEFT, R_RIGHT = 386, 374, 362, 263
+    # ── Head Tracker ─────────────────────────────────────────────
+    tracker = HeadTracker(cfg)
 
-    # Cursor smoothing & sensitivity
-    smooth_x, smooth_y = screen_w / 2, screen_h / 2
-    smooth_factor = 0.35     # Faster response
-    cursor_speed = 2.5       # Increased sensitivity
+    # ── Dwell Clicker ────────────────────────────────────────────
+    dwell = DwellClicker(dwell_time=cfg.dwell_time, radius=cfg.dwell_radius)
+    dwell_enabled = True
 
-    # Blink detection
-    blink_threshold = 0.18
-    intentional_blink_time = 0.4
+    # ── Blink Detector ───────────────────────────────────────────
+    blink_detector = BlinkDetector(cfg)
 
-    blink_start_time = 0
-    blink_detected = False
+    # ── State variables ──────────────────────────────────────────
+    drag_mode = False
+    blink_feedback_until: float = 0.0
+    blink_feedback_text: str = ""
 
-    # Double blink
-    last_blink_time = 0
-    double_blink_gap = 0.6
-
-    # Rest reminder
+    # ── Rest reminder ────────────────────────────────────────────
     session_start = time.time()
-    rest_interval = 60  # seconds
 
-    print("Blink-Click Virtual Mouse started.")
-    print("Press ESC to exit.")
+    # ── FPS counter ──────────────────────────────────────────────
+    fps_time = time.time()
+    fps_count = 0
+    fps_display = 0
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
+    # ── Voice controller ─────────────────────────────────────────
+    voice: Optional[VoiceController] = None
+    if SR_AVAILABLE:
+        try:
+            voice = VoiceController(assistant=assistant)
+            logger.info("Voice controller active – say 'help' for commands.")
+        except Exception as exc:
+            logger.error("Cannot start voice controller: %s", exc)
 
-        frame = cv2.flip(frame, 1)
-        h, w, _ = frame.shape
+    # ── Banner ───────────────────────────────────────────────────
+    _print_banner(assistant, voice, cfg)
 
-        # -----------------------------
-        # Lighting Enhancement (Colorful)
-        # -----------------------------
-        alpha = 1.4   # Contrast
-        beta = 20     # Brightness
-        frame = cv2.convertScaleAbs(frame, alpha=alpha, beta=beta)
+    # ── Main loop ────────────────────────────────────────────────
+    try:
+        while True:
+            ret, frame = cam.read()
+            if not ret or frame is None:
+                continue
 
-        # Noise reduction
-        frame = cv2.GaussianBlur(frame, (3, 3), 0)
+            frame = cv2.flip(frame, 1)
+            h, w, _ = frame.shape
 
-        # -----------------------------
-        # Face Mesh Processing
-        # -----------------------------
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        result = face_mesh.process(rgb)
+            # Enhance frame
+            frame = cv2.convertScaleAbs(frame, alpha=cfg.frame_alpha, beta=cfg.frame_beta)
+            frame = cv2.GaussianBlur(frame, cfg.blur_kernel, 0)
 
-        if result.multi_face_landmarks:
-            landmarks = result.multi_face_landmarks[0].landmark
-
-            # -----------------------------
-            # Cursor Movement
-            # -----------------------------
-            def iris_center(indices):
-                pts = [get_point(landmarks, i, w, h) for i in indices]
-                cx = sum(p[0] for p in pts) / len(pts)
-                cy = sum(p[1] for p in pts) / len(pts)
-                return cx, cy
-
-            lx, ly = iris_center(LEFT_IRIS)
-            rx, ry = iris_center(RIGHT_IRIS)
-
-            gaze_x = (lx + rx) / 2
-            gaze_y = (ly + ry) / 2
-
-            nx = gaze_x / w
-            ny = gaze_y / h
-
-            target_x = nx * screen_w * cursor_speed
-            target_y = ny * screen_h * cursor_speed
-
-            smooth_x = (1 - smooth_factor) * smooth_x + smooth_factor * target_x
-            smooth_y = (1 - smooth_factor) * smooth_y + smooth_factor * target_y
-
-            pyautogui.moveTo(smooth_x, smooth_y)
-
-            # Draw iris centers
-            cv2.circle(frame, (int(lx), int(ly)), 3, (0, 255, 0), -1)
-            cv2.circle(frame, (int(rx), int(ry)), 3, (0, 255, 0), -1)
-
-            # -----------------------------
-            # Blink Detection
-            # -----------------------------
-            left_ear = eye_aspect_ratio(
-                landmarks, w, h,
-                L_TOP, L_BOTTOM, L_LEFT, L_RIGHT
-            )
-
-            right_ear = eye_aspect_ratio(
-                landmarks, w, h,
-                R_TOP, R_BOTTOM, R_LEFT, R_RIGHT
-            )
-
-            avg_ear = (left_ear + right_ear) / 2
             now = time.time()
 
-            if avg_ear < blink_threshold:
+            # ── Face mesh processing ─────────────────────────────
+            lm = face_mesh.process(frame)
 
-                if not blink_detected:
-                    blink_start_time = now
-                    blink_detected = True
+            if lm is not None:
+                # ── HEAD CURSOR ──────────────────────────────────
+                nose = lm[HeadTracker.NOSE_TIP]
+                scr_x, scr_y = tracker.update(nose.x, nose.y, now)
+                pyautogui.moveTo(scr_x, scr_y, _pause=False)
+
+                # Nose marker
+                npx, npy = int(nose.x * w), int(nose.y * h)
+                draw_nose_marker(frame, npx, npy)
+
+                # Forehead dot
+                fh = lm[HeadTracker.FOREHEAD]
+                cv2.circle(
+                    frame,
+                    (int(fh.x * w), int(fh.y * h)),
+                    4, (255, 200, 0), -1,
+                )
+
+                # ── DWELL CLICK ──────────────────────────────────
+                if dwell_enabled:
+                    clicked, progress = dwell.update(tracker.cur_x, tracker.cur_y)
+                    if progress > 0.05:
+                        draw_dwell_arc(frame, npx, npy, progress)
+                    if clicked:
+                        pyautogui.click()
+                        blink_feedback_text = "DWELL CLICK"
+                        blink_feedback_until = now + cfg.dwell_feedback_duration
+                        if assistant:
+                            assistant.say("Dwell click")
+
+                # ── BLINK DETECTION ──────────────────────────────
+                left_ear = compute_eye_aspect_ratio(
+                    lm, w, h,
+                    HeadTracker.L_TOP, HeadTracker.L_BOTTOM,
+                    HeadTracker.L_LEFT, HeadTracker.L_RIGHT,
+                )
+                right_ear = compute_eye_aspect_ratio(
+                    lm, w, h,
+                    HeadTracker.R_TOP, HeadTracker.R_BOTTOM,
+                    HeadTracker.R_LEFT, HeadTracker.R_RIGHT,
+                )
+                avg_ear = (left_ear + right_ear) / 2
+
+                blink_result = blink_detector.update(avg_ear, now)
+                if blink_result == "left":
+                    pyautogui.click()
+                    blink_feedback_text = "LEFT CLICK"
+                    blink_feedback_until = now + cfg.click_feedback_duration
+                    if assistant:
+                        assistant.say("Click")
+                elif blink_result == "right":
+                    pyautogui.rightClick()
+                    blink_feedback_text = "RIGHT CLICK"
+                    blink_feedback_until = now + cfg.click_feedback_duration
+                    if assistant:
+                        assistant.say("Right click")
+
+                # EAR bar
+                draw_ear_bar(frame, avg_ear, cfg.blink_threshold)
 
             else:
-                if blink_detected:
-                    blink_duration = now - blink_start_time
+                draw_no_face_warning(frame, w, h)
 
-                    if blink_duration > intentional_blink_time:
+            # ── VOICE COMMANDS ───────────────────────────────────
+            if voice:
+                cmd = voice.get_command()
+                if cmd:
+                    if "dwell" in cmd:
+                        dwell_enabled = not dwell_enabled
+                        msg = (
+                            "Dwell click enabled"
+                            if dwell_enabled
+                            else "Dwell click disabled"
+                        )
+                        if assistant:
+                            assistant.say(msg)
+                    else:
+                        drag_mode, should_exit = process_voice_command(
+                            cmd, drag_mode, assistant, voice
+                        )
+                        if should_exit:
+                            break
+            # ── VOICE STATUS HUD ─────────────────────────────────
+            if voice:
+                v_listening = voice.listening
+                v_last = voice.last_matched
+                v_age = now - voice.last_heard_time if voice.last_heard_time else 999
+                draw_voice_status(frame, w, h, v_listening, v_last, v_age)
+            # ── CLICK FEEDBACK OVERLAY ───────────────────────────
+            if now < blink_feedback_until and blink_feedback_text:
+                draw_click_feedback(frame, blink_feedback_text, w, h)
 
-                        # Double blink → Right click
-                        if (now - last_blink_time) < double_blink_gap:
-                            pyautogui.rightClick()
-                        else:
-                            pyautogui.click()
+            # ── STATUS PANEL ─────────────────────────────────────
+            status_lines = [
+                f"Voice : {'ON  (say help)' if voice else 'OFF'}",
+                f"TTS   : {'ON' if assistant else 'OFF'}",
+                f"Dwell : {'ON  (hold {cfg.dwell_time:.1f}s)' if dwell_enabled else 'OFF'}",
+                f"Drag  : {'ON' if drag_mode else 'OFF'}",
+                f"FPS   : {fps_display}",
+            ]
+            draw_status_panel(frame, w - 220, 4, status_lines)
 
-                        last_blink_time = now
+            # ── REST REMINDER ────────────────────────────────────
+            if now - session_start > cfg.rest_interval:
+                draw_rest_reminder(frame, w, h)
+                session_start = now
 
-                    blink_detected = False
+            # ── FPS ──────────────────────────────────────────────
+            fps_count += 1
+            if now - fps_time >= 1.0:
+                fps_display = fps_count
+                fps_count = 0
+                fps_time = now
 
-            # Show blink ratio
-            cv2.putText(frame,
-                        f"Blink Ratio: {avg_ear:.3f}",
-                        (20, 40),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.7,
-                        (255, 255, 255),
-                        2)
+            # ── SHOW ─────────────────────────────────────────────
+            cv2.imshow(
+                "Blink-Click Virtual Mouse  |  Accessibility Edition", frame
+            )
+            if cv2.waitKey(1) & 0xFF == 27:
+                if assistant:
+                    assistant.say("Goodbye")
+                break
 
-        # -----------------------------
-        # Rest Reminder
-        # -----------------------------
-        if time.time() - session_start > rest_interval:
-            cv2.putText(frame,
-                        "Take Eye Rest!",
-                        (200, 200),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        1,
-                        (0, 0, 255),
-                        3)
+    except KeyboardInterrupt:
+        logger.info("Interrupted by user.")
 
-        # Display window
-        cv2.imshow("Blink Click Virtual Mouse", frame)
-
-        key = cv2.waitKey(1) & 0xFF
-        if key == 27:
-            break
-
-    cap.release()
+    # ── CLEANUP ──────────────────────────────────────────────────
+    logger.info("Shutting down …")
+    if drag_mode:
+        pyautogui.mouseUp()
+    if voice:
+        voice.stop()
+    if assistant:
+        assistant.stop()
+    cam.release()
     cv2.destroyAllWindows()
+    print("\nProgram closed. Goodbye!")
 
 
 if __name__ == "__main__":
