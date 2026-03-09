@@ -9,7 +9,7 @@ This module provides:
   • One-Euro filter for glass-smooth, tremor-resilient movement
   • Dead-zone filtering to ignore micro-tremors
   • Blink detection (single long blink → left click, double → right click)
-  • Dwell-Click (hold cursor still → auto left-click)
+    • (dwell-click feature removed)
   • Threaded camera capture for zero-blocking reads
   • HUD overlays (status panel, EAR bar, dwell arc, click feedback)
 
@@ -23,7 +23,8 @@ import math
 import time
 import logging
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Optional, Tuple
 
 import mediapipe as mp
@@ -45,6 +46,7 @@ class MouseConfig:
     camera_width: int = 640
     camera_height: int = 480
     camera_fps: int = 60
+    camera_backend: str = "auto"
 
     # Head-to-screen mapping boundaries (normalised face coords)
     head_x_min: float = 0.32
@@ -58,14 +60,14 @@ class MouseConfig:
     filter_d_cutoff: float = 1.0
 
     # Dead zone (pixels) – displacements below this are ignored
-    dead_zone_px: int = 12
+    dead_zone_px: int = 6
 
     # Cursor interpolation factor (0–1, lower = smoother / laggier)
-    cursor_lerp: float = 0.45
+    cursor_lerp: float = 0.18
+    cursor_fast_lerp: float = 0.34
+    max_cursor_step_px: int = 80
 
-    # Dwell-click
-    dwell_time: float = 1.5
-    dwell_radius: int = 25
+    # (dwell-click removed)
 
     # Blink detection
     blink_threshold: float = 0.20
@@ -74,7 +76,6 @@ class MouseConfig:
 
     # Feedback overlay duration (seconds)
     click_feedback_duration: float = 0.8
-    dwell_feedback_duration: float = 0.7
 
     # Frame enhancement
     frame_alpha: float = 1.25
@@ -87,8 +88,8 @@ class MouseConfig:
     rest_interval: float = 120.0
 
     # MediaPipe Face Mesh confidence
-    detection_confidence: float = 0.75
-    tracking_confidence: float = 0.75
+    detection_confidence: float = 0.55
+    tracking_confidence: float = 0.55
 
 
 # ================================================================
@@ -144,51 +145,7 @@ class OneEuroFilter:
         return x_hat
 
 
-# ================================================================
-#  DWELL CLICKER  – hover still → auto-click
-# ================================================================
-class DwellClicker:
-    """Left-click automatically when cursor stays in the same region."""
-
-    def __init__(self, dwell_time: float = 1.5, radius: int = 25) -> None:
-        self.dwell_time = dwell_time
-        self.radius = radius
-        self._anchor_x: float = 0.0
-        self._anchor_y: float = 0.0
-        self._dwell_start: Optional[float] = None
-        self._triggered: bool = False
-
-    def update(self, x: float, y: float) -> Tuple[bool, float]:
-        """
-        Call every frame.
-
-        Returns
-        -------
-        clicked : bool
-            True on the exact frame the dwell completes.
-        progress : float
-            0.0 → 1.0 indicating how close to triggering.
-        """
-        moved = math.hypot(x - self._anchor_x, y - self._anchor_y) > self.radius
-
-        if moved:
-            self._anchor_x = x
-            self._anchor_y = y
-            self._dwell_start = time.time()
-            self._triggered = False
-            return False, 0.0
-
-        if self._dwell_start is None:
-            self._dwell_start = time.time()
-
-        elapsed = time.time() - self._dwell_start
-        progress = min(elapsed / self.dwell_time, 1.0)
-
-        if progress >= 1.0 and not self._triggered:
-            self._triggered = True
-            return True, 1.0
-
-        return False, progress
+# Dwell click feature removed.
 
 
 # ================================================================
@@ -249,7 +206,9 @@ class CameraCapture:
     """Non-blocking threaded camera reader."""
 
     def __init__(self, cfg: MouseConfig) -> None:
-        self._cap = cv2.VideoCapture(cfg.camera_index, cv2.CAP_DSHOW)
+        self.backend_name = "unknown"
+        self.camera_index = cfg.camera_index
+        self._cap = self._open_camera(cfg)
         self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, cfg.camera_width)
         self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cfg.camera_height)
         self._cap.set(cv2.CAP_PROP_FPS, cfg.camera_fps)
@@ -261,7 +220,38 @@ class CameraCapture:
 
         self._thread = threading.Thread(target=self._update, daemon=True)
         self._thread.start()
-        logger.info("Camera capture started (index=%d)", cfg.camera_index)
+        logger.info(
+            "Camera capture started (index=%d, backend=%s)",
+            self.camera_index,
+            self.backend_name,
+        )
+
+    def _open_camera(self, cfg: MouseConfig):
+        backend_map = {
+            "auto": [("DSHOW", cv2.CAP_DSHOW), ("MSMF", cv2.CAP_MSMF), ("ANY", cv2.CAP_ANY)],
+            "dshow": [("DSHOW", cv2.CAP_DSHOW)],
+            "msmf": [("MSMF", cv2.CAP_MSMF)],
+            "any": [("ANY", cv2.CAP_ANY)],
+        }
+        backend_candidates = backend_map.get(cfg.camera_backend.lower(), backend_map["auto"])
+        index_candidates = [cfg.camera_index]
+        if cfg.camera_index == 0:
+            index_candidates.append(1)
+
+        for index in index_candidates:
+            for backend_name, backend in backend_candidates:
+                cap = cv2.VideoCapture(index, backend)
+                if cap.isOpened():
+                    ret, frame = cap.read()
+                    if ret and frame is not None:
+                        self.backend_name = backend_name
+                        self.camera_index = index
+                        return cap
+                cap.release()
+
+        raise RuntimeError(
+            "Could not open a working camera. Try CAMERA_INDEX=1 or CAMERA_BACKEND=msmf."
+        )
 
     def _update(self) -> None:
         while not self._stopped:
@@ -269,6 +259,8 @@ class CameraCapture:
             with self._lock:
                 self._ret = ret
                 self._frame = frame
+            if not ret:
+                time.sleep(0.01)
 
     def read(self):
         with self._lock:
@@ -336,15 +328,7 @@ def draw_status_panel(
         )
 
 
-def draw_dwell_arc(
-    frame, cx: int, cy: int, progress: float
-) -> None:
-    """Draw a coloured progress arc around the dwell centre."""
-    radius = 28
-    angle = int(360 * progress)
-    color = (0, int(200 * progress), int(255 * (1 - progress)))
-    cv2.ellipse(frame, (cx, cy), (radius, radius), -90, 0, angle, color, 3, cv2.LINE_AA)
-    cv2.circle(frame, (cx, cy), 5, color, -1)
+# draw_dwell_arc removed (dwell-click feature disabled)
 
 
 def draw_ear_bar(
@@ -369,12 +353,8 @@ def draw_nose_marker(frame, nose_px: int, nose_py: int) -> None:
 
 
 def draw_click_feedback(frame, text: str, w: int, h: int) -> None:
-    """Flash a large label (LEFT CLICK / RIGHT CLICK / DWELL) at screen centre."""
-    color = (
-        (0, 255, 0)
-        if "LEFT" in text or "DWELL" in text
-        else (0, 80, 255)
-    )
+    """Flash a large label (LEFT CLICK / RIGHT CLICK) at screen centre."""
+    color = ((0, 255, 0) if "LEFT" in text else (0, 80, 255))
     cv2.putText(
         frame, text, (w // 2 - 90, h // 2),
         cv2.FONT_HERSHEY_SIMPLEX, 1.2, color, 3, cv2.LINE_AA,
@@ -477,7 +457,7 @@ class HeadTracker:
     R_TOP, R_BOTTOM, R_LEFT, R_RIGHT = 386, 374, 362, 263
 
     # Number of frames to average the nose landmark over
-    _LANDMARK_BUFFER_SIZE = 4
+    _LANDMARK_BUFFER_SIZE = 6
 
     def __init__(self, cfg: MouseConfig) -> None:
         self.cfg = cfg
@@ -539,12 +519,28 @@ class HeadTracker:
         fx = self._filter_x(raw_x, now)
         fy = self._filter_y(raw_y, now)
 
+        dx = fx - self.cur_x
+        dy = fy - self.cur_y
+        distance = math.hypot(dx, dy)
+
         # 4. Dead-zone gate
-        if math.hypot(fx - self.cur_x, fy - self.cur_y) > cfg.dead_zone_px:
-            # 5. Smooth interpolation (LERP) toward target
-            lerp = cfg.cursor_lerp
-            self.cur_x += (fx - self.cur_x) * lerp
-            self.cur_y += (fy - self.cur_y) * lerp
+        if distance > cfg.dead_zone_px:
+            # 5. Adaptive interpolation: smoother for precision, faster for travel.
+            distance_ratio = min(distance / 220.0, 1.0)
+            lerp = cfg.cursor_lerp + (
+                (cfg.cursor_fast_lerp - cfg.cursor_lerp) * distance_ratio
+            )
+            step_x = dx * lerp
+            step_y = dy * lerp
+            step_distance = math.hypot(step_x, step_y)
+
+            if step_distance > cfg.max_cursor_step_px:
+                scale = cfg.max_cursor_step_px / step_distance
+                step_x *= scale
+                step_y *= scale
+
+            self.cur_x += step_x
+            self.cur_y += step_y
 
         return int(self.cur_x), int(self.cur_y)
 
@@ -556,14 +552,32 @@ class FaceMeshProcessor:
     """Wraps MediaPipe FaceMesh initialisation and per-frame processing."""
 
     def __init__(self, cfg: MouseConfig) -> None:
-        self._mp_face_mesh = mp.solutions.face_mesh
-        self._mesh = self._mp_face_mesh.FaceMesh(
-            refine_landmarks=True,
-            max_num_faces=1,
-            min_detection_confidence=cfg.detection_confidence,
-            min_tracking_confidence=cfg.tracking_confidence,
+        self.mode = "haar"
+        self.supports_blink = False
+        self._mesh = None
+        self._face_cascade = None
+
+        if hasattr(mp, "solutions"):
+            self._mp_face_mesh = mp.solutions.face_mesh
+            self._mesh = self._mp_face_mesh.FaceMesh(
+                refine_landmarks=True,
+                max_num_faces=1,
+                min_detection_confidence=cfg.detection_confidence,
+                min_tracking_confidence=cfg.tracking_confidence,
+            )
+            self.mode = "mesh"
+            self.supports_blink = True
+            logger.info("MediaPipe FaceMesh initialised.")
+            return
+
+        cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+        self._face_cascade = cv2.CascadeClassifier(cascade_path)
+        if self._face_cascade.empty():
+            raise RuntimeError("Could not initialise MediaPipe or OpenCV face detection.")
+        logger.warning(
+            "MediaPipe FaceMesh is unavailable in this Python environment. "
+            "Falling back to OpenCV Haar face detection with blink disabled."
         )
-        logger.info("MediaPipe FaceMesh initialised.")
 
     def process(self, frame):
         """
@@ -573,8 +587,40 @@ class FaceMeshProcessor:
         -------
         landmarks or None
         """
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        result = self._mesh.process(rgb)
-        if result.multi_face_landmarks:
-            return result.multi_face_landmarks[0].landmark
-        return None
+        if self.mode == "mesh":
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            result = self._mesh.process(rgb)
+            if result.multi_face_landmarks:
+                return result.multi_face_landmarks[0].landmark
+            return None
+
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        faces = self._face_cascade.detectMultiScale(
+            gray,
+            scaleFactor=1.1,
+            minNeighbors=6,
+            minSize=(80, 80),
+        )
+        if len(faces) == 0:
+            return None
+
+        x, y, fw, fh = max(faces, key=lambda box: box[2] * box[3])
+        landmarks = [SimpleNamespace(x=0.5, y=0.5) for _ in range(387)]
+
+        def set_point(idx: int, px: float, py: float) -> None:
+            landmarks[idx] = SimpleNamespace(
+                x=max(0.0, min(1.0, px / frame.shape[1])),
+                y=max(0.0, min(1.0, py / frame.shape[0])),
+            )
+
+        set_point(HeadTracker.NOSE_TIP, x + fw * 0.5, y + fh * 0.58)
+        set_point(HeadTracker.FOREHEAD, x + fw * 0.5, y + fh * 0.18)
+        set_point(HeadTracker.L_LEFT, x + fw * 0.30, y + fh * 0.38)
+        set_point(HeadTracker.L_RIGHT, x + fw * 0.43, y + fh * 0.38)
+        set_point(HeadTracker.L_TOP, x + fw * 0.365, y + fh * 0.35)
+        set_point(HeadTracker.L_BOTTOM, x + fw * 0.365, y + fh * 0.41)
+        set_point(HeadTracker.R_LEFT, x + fw * 0.57, y + fh * 0.38)
+        set_point(HeadTracker.R_RIGHT, x + fw * 0.70, y + fh * 0.38)
+        set_point(HeadTracker.R_TOP, x + fw * 0.635, y + fh * 0.35)
+        set_point(HeadTracker.R_BOTTOM, x + fw * 0.635, y + fh * 0.41)
+        return landmarks
