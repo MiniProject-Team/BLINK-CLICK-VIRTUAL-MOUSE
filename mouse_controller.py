@@ -61,11 +61,15 @@ class MouseConfig:
 
     # Dead zone (pixels) – displacements below this are ignored
     dead_zone_px: int = 6
+    precision_dead_zone_px: int = 3
 
     # Cursor interpolation factor (0–1, lower = smoother / laggier)
     cursor_lerp: float = 0.18
     cursor_fast_lerp: float = 0.34
+    cursor_precision_lerp: float = 0.11
     max_cursor_step_px: int = 80
+    max_precision_step_px: int = 26
+    pointer_response_curve: float = 1.35
 
     # (dwell-click removed)
 
@@ -457,7 +461,7 @@ class HeadTracker:
     R_TOP, R_BOTTOM, R_LEFT, R_RIGHT = 386, 374, 362, 263
 
     # Number of frames to average the nose landmark over
-    _LANDMARK_BUFFER_SIZE = 6
+    _LANDMARK_BUFFER_SIZE = 8
 
     def __init__(self, cfg: MouseConfig) -> None:
         self.cfg = cfg
@@ -480,6 +484,16 @@ class HeadTracker:
         # Ring buffer for landmark averaging (tremor suppression)
         self._nose_buf_x: list[float] = []
         self._nose_buf_y: list[float] = []
+        self._last_filtered_x: float = self.cur_x
+        self._last_filtered_y: float = self.cur_y
+
+    @staticmethod
+    def _apply_response_curve(value: float, curve: float) -> float:
+        """Reduce sensitivity near the center while preserving full-range reach."""
+        value = max(0.0, min(1.0, value))
+        centered = (value * 2.0) - 1.0
+        curved = math.copysign(abs(centered) ** curve, centered)
+        return (curved + 1.0) / 2.0
 
     def update(self, nose_x: float, nose_y: float, now: float) -> Tuple[int, int]:
         """
@@ -511,6 +525,8 @@ class HeadTracker:
         my = (avg_ny - cfg.head_y_min) / (cfg.head_y_max - cfg.head_y_min)
         mx = max(0.0, min(1.0, mx))
         my = max(0.0, min(1.0, my))
+        mx = self._apply_response_curve(mx, cfg.pointer_response_curve)
+        my = self._apply_response_curve(my, cfg.pointer_response_curve)
 
         raw_x = mx * self.screen_w
         raw_y = my * self.screen_h
@@ -518,24 +534,38 @@ class HeadTracker:
         # 3. One-Euro filter
         fx = self._filter_x(raw_x, now)
         fy = self._filter_y(raw_y, now)
+        filtered_speed = math.hypot(
+            fx - self._last_filtered_x,
+            fy - self._last_filtered_y,
+        )
+        self._last_filtered_x = fx
+        self._last_filtered_y = fy
 
         dx = fx - self.cur_x
         dy = fy - self.cur_y
         distance = math.hypot(dx, dy)
 
         # 4. Dead-zone gate
-        if distance > cfg.dead_zone_px:
+        active_dead_zone = (
+            cfg.precision_dead_zone_px if filtered_speed < 18.0 else cfg.dead_zone_px
+        )
+        if distance > active_dead_zone:
             # 5. Adaptive interpolation: smoother for precision, faster for travel.
-            distance_ratio = min(distance / 220.0, 1.0)
-            lerp = cfg.cursor_lerp + (
-                (cfg.cursor_fast_lerp - cfg.cursor_lerp) * distance_ratio
-            )
+            if distance < 40.0:
+                lerp = cfg.cursor_precision_lerp
+                step_limit = cfg.max_precision_step_px
+            else:
+                distance_ratio = min((distance - 40.0) / 220.0, 1.0)
+                lerp = cfg.cursor_lerp + (
+                    (cfg.cursor_fast_lerp - cfg.cursor_lerp) * distance_ratio
+                )
+                step_limit = cfg.max_cursor_step_px
             step_x = dx * lerp
             step_y = dy * lerp
             step_distance = math.hypot(step_x, step_y)
 
-            if step_distance > cfg.max_cursor_step_px:
-                scale = cfg.max_cursor_step_px / step_distance
+            if step_distance > step_limit:
+                scale = step_limit / step_distance
                 step_x *= scale
                 step_y *= scale
 
