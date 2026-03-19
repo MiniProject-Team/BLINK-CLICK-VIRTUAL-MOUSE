@@ -6,3 +6,5 @@ __pycache__/
 *.dll
 *.exe
 .env
+frontend/node_modules/
+frontend/.vite/

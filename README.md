@@ -31,6 +31,7 @@
 | **OpenCV** | Camera capture, frame processing, HUD rendering |
 | **PyAutoGUI** | Cursor movement, clicks, scrolling, typing |
 | **SpeechRecognition** | Google Speech API for voice commands |
+| **Ollama (phi3)** | Local intent planning from natural speech |
 | **pyttsx3** | Text-to-Speech for spoken feedback |
 
 The system is split into **two core modules** for clean separation of concerns:
@@ -62,9 +63,12 @@ The **`main.py`** file is the entry point that wires both modules together.
 
 ### Voice Assistant (Speech Recognition + TTS)
 - **Google Speech API** for high-accuracy online recognition.
+- **Wake word support** — say **"Ashu"** before your request, like a desktop assistant.
+- **Ollama phi3 (optional)** converts natural sentences into safe desktop tasks.
 - **pyttsx3** for spoken feedback (the assistant talks back).
-- Recognises **any speech** — unknown phrases are echoed back so you know you were heard.
-- Supports click, scroll, drag, type, open websites, and more (see [Voice Commands](#voice-commands)).
+- Voice task execution is **brain-only** with no fixed keyword-only fallback.
+- Sensitive actions can require spoken confirmation: **"Ashu confirm"** or **"Ashu cancel"**.
+- Supports click, scroll, drag, type, open websites, key presses, and safe app launches.
 
 ### HUD Overlay
 - **Status panel** — Shows Voice / TTS / Dwell / Drag / FPS status.
@@ -91,7 +95,7 @@ BLINK-CLICK-VIRTUAL-MOUSE/
 | File | Classes / Functions |
 |---|---|
 | **mouse_controller.py** | `MouseConfig`, `OneEuroFilter`, `DwellClicker`, `BlinkDetector`, `CameraCapture`, `HeadTracker`, `FaceMeshProcessor`, drawing utilities |
-| **speech_controller.py** | `AssistantVoice`, `VoiceController`, `process_voice_command()` |
+| **speech_controller.py** | `AssistantVoice`, `VoiceController`, `OllamaBrain`, `VoiceCommandProcessor` |
 | **main.py** | `main()` — initialises all components, runs the main loop |
 
 ---
@@ -102,6 +106,7 @@ BLINK-CLICK-VIRTUAL-MOUSE/
 - **Webcam** (built-in or USB)
 - **Microphone** (for voice commands)
 - **Internet connection** (required for Google Speech Recognition API)
+- **Ollama with phi3 model** (optional, for local command planning)
 - **Windows 10/11** (tested; macOS/Linux may need minor changes to camera backend)
 
 ---
@@ -144,6 +149,34 @@ source .venv/bin/activate
 pip install opencv-python mediapipe pyautogui SpeechRecognition pyttsx3 PyAudio
 ```
 
+### 5. Optional: Enable local Ollama brain
+
+```bash
+ollama pull phi3
+```
+
+The app auto-enables Ollama planning if available.
+
+Environment variables:
+
+- `OLLAMA_BRAIN=1` enable (default) or `0` disable
+- `OLLAMA_MODEL=phi3` choose model
+- `OLLAMA_HOST=http://127.0.0.1:11434` Ollama endpoint
+- `OLLAMA_TIMEOUT=25` planner timeout in seconds
+- `WAKE_WORD=ashu` change the wake word if needed
+
+If the app hears your voice but does not perform the task, make sure Ollama is running:
+
+```bash
+ollama serve
+```
+
+Then confirm your model is available:
+
+```bash
+ollama list
+```
+
 > **Note (Windows):** If `PyAudio` fails to install, download the wheel from  
 > https://www.lfd.uci.edu/~gohlke/pythonlibs/#pyaudio and install with  
 > `pip install PyAudio‑0.2.14‑cp311‑cp311‑win_amd64.whl` (choose your Python version).
@@ -160,8 +193,31 @@ On startup you will see:
 1. A terminal banner showing the status of TTS, Voice, Cursor, and Click systems.
 2. An OpenCV window titled **"Blink-Click Virtual Mouse | Accessibility Edition"**.
 3. The assistant will greet you with a spoken message.
+4. Voice commands only run after the wake word, for example: **"Ashu open YouTube"**.
 
-**To exit:** Press the **ESC** key, or say **"stop"** / **"exit"**.
+**To exit:** Press the **ESC** key, or say **"Ashu stop"**.
+
+---
+
+## Frontend Launcher
+
+A simple React project page is included for local use. It shows public-facing project information and a **Start Project** button.
+
+Run the launcher page:
+
+```bash
+python frontend_server.py
+```
+
+Run this from the same Python environment you use for `main.py`.
+
+Then open:
+
+```text
+http://127.0.0.1:3000
+```
+
+The Start button launches `main.py` locally from the browser page through the local launcher server.
 
 ---
 
@@ -213,33 +269,28 @@ On startup you will see:
 1. If the cursor stays within a **25 px radius** for **1.5 seconds**, an automatic **left click** fires.
 2. A coloured **arc** fills around the nose marker showing progress.
 
-### Voice Commands
+### Voice Understanding
 1. A background thread continuously listens via the **microphone**.
-2. Audio is sent to **Google Speech Recognition API** for transcription.
-3. Recognised text is matched against known commands.
-4. The **TTS assistant** speaks a confirmation back.
+2. The app waits for the wake word **"Ashu"** before accepting a command.
+3. Audio is sent to **Google Speech Recognition API** for transcription.
+4. Recognised text is sent to **Ollama phi3** for safe intent planning.
+5. The assistant executes only allowed actions, and blocks or confirms sensitive ones.
+6. The **TTS assistant** speaks a response back.
 
 ---
 
-## Voice Commands
+## Voice Tasks
 
-| Command | Action |
-|---|---|
-| `"click"` | Left click at current cursor position |
-| `"right click"` | Right click |
-| `"double click"` | Double click |
-| `"scroll up"` | Scroll up (8 units) |
-| `"scroll down"` | Scroll down (8 units) |
-| `"drag"` | Toggle drag mode ON/OFF |
-| `"type hello world"` | Types "hello world" at the cursor |
-| `"open google"` | Opens Google in the default browser |
-| `"open youtube"` | Opens YouTube in the default browser |
-| `"dwell"` | Toggle dwell-click ON/OFF |
-| `"help"` | Read all available commands aloud |
-| `"stop"` / `"exit"` | Quit the program |
+The assistant is **not command-locked** anymore. Start with the wake word, then speak naturally:
 
-> Any phrase that does **not** match a command is echoed back:  
-> *"I heard: [your words]. I did not understand that command. Say help for options."*
+- "Ashu open youtube and search lo-fi music"
+- "Ashu scroll down a bit"
+- "Ashu type hello this is ayush"
+- "Ashu press enter"
+- "Ashu open notepad"
+- "Ashu stop"
+
+If the intent is unclear, risky, or security-sensitive, the request is blocked or asks for confirmation.
 
 ---
 

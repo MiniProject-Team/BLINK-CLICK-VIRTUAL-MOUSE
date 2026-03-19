@@ -74,9 +74,11 @@ class MouseConfig:
     # (dwell-click removed)
 
     # Blink detection
-    blink_threshold: float = 0.20
-    intentional_blink_duration: float = 0.35
-    double_blink_gap: float = 0.65
+    blink_threshold: float = 0.17
+    intentional_blink_duration: float = 0.36
+    double_blink_gap: float = 0.55
+    blink_release_margin: float = 0.02
+    click_cooldown_s: float = 0.75
 
     # Feedback overlay duration (seconds)
     click_feedback_duration: float = 0.8
@@ -167,11 +169,17 @@ class BlinkDetector:
         self.threshold = cfg.blink_threshold
         self.intentional_duration = cfg.intentional_blink_duration
         self.double_gap = cfg.double_blink_gap
+        self.release_threshold = min(
+            1.0,
+            self.threshold + max(0.01, cfg.blink_release_margin),
+        )
+        self.click_cooldown_s = max(0.0, cfg.click_cooldown_s)
         self.feedback_duration = cfg.click_feedback_duration
 
         self._blink_start: float = 0.0
         self._blink_detected: bool = False
-        self._last_blink_time: float = 0.0
+        self._cooldown_until: float = 0.0
+        self._pending_single_blink_at: Optional[float] = None
 
     def update(self, avg_ear: float, now: float) -> Optional[str]:
         """
@@ -185,20 +193,85 @@ class BlinkDetector:
             if not self._blink_detected:
                 self._blink_start = now
                 self._blink_detected = True
+                logger.debug(
+                    "BlinkDetector closed eyes (ear=%.3f threshold=%.3f)",
+                    avg_ear,
+                    self.threshold,
+                )
             return None
 
-        # Eyes just opened
+        # Keep the blink active until the eyes reopen clearly above the threshold.
+        if self._blink_detected and avg_ear < self.release_threshold:
+            return None
+
         if self._blink_detected:
             duration = now - self._blink_start
             self._blink_detected = False
+            logger.debug(
+                "BlinkDetector reopened eyes (duration=%.3fs ear=%.3f)",
+                duration,
+                avg_ear,
+            )
 
-            if duration > self.intentional_duration:
-                if (now - self._last_blink_time) < self.double_gap:
-                    self._last_blink_time = now
-                    return "right"
+            if duration >= self.intentional_duration:
+                if self._pending_single_blink_at is not None:
+                    gap = now - self._pending_single_blink_at
                 else:
-                    self._last_blink_time = now
-                    return "left"
+                    gap = None
+
+                if gap is not None and gap < self.double_gap:
+                    self._pending_single_blink_at = None
+                    if now < self._cooldown_until:
+                        logger.debug(
+                            "BlinkDetector suppressed right click during cooldown "
+                            "(gap=%.3fs cooldown_remaining=%.3fs)",
+                            gap,
+                            self._cooldown_until - now,
+                        )
+                        return None
+
+                    self._cooldown_until = now + self.click_cooldown_s
+                    logger.info(
+                        "BlinkDetector emitted right click (gap=%.3fs cooldown=%.2fs)",
+                        gap,
+                        self.click_cooldown_s,
+                    )
+                    return "right"
+
+                self._pending_single_blink_at = now
+                logger.debug(
+                    "BlinkDetector queued left click candidate "
+                    "(duration=%.3fs wait_for_double=%.2fs)",
+                    duration,
+                    self.double_gap,
+                )
+                return None
+
+            logger.debug(
+                "BlinkDetector ignored short blink (duration=%.3fs minimum=%.3fs)",
+                duration,
+                self.intentional_duration,
+            )
+
+        if self._pending_single_blink_at is not None:
+            pending_age = now - self._pending_single_blink_at
+            if pending_age >= self.double_gap:
+                self._pending_single_blink_at = None
+                if now < self._cooldown_until:
+                    logger.debug(
+                        "BlinkDetector suppressed pending left click during cooldown "
+                        "(ear=%.3f cooldown_remaining=%.3fs)",
+                        avg_ear,
+                        self._cooldown_until - now,
+                    )
+                    return None
+
+                self._cooldown_until = now + self.click_cooldown_s
+                logger.info(
+                    "BlinkDetector emitted left click (cooldown=%.2fs)",
+                    self.click_cooldown_s,
+                )
+                return "left"
 
         return None
 
