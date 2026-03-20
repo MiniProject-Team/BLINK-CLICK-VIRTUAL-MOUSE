@@ -87,6 +87,13 @@ def _start_project() -> tuple[bool, str]:
         if not python_executable:
             python_executable = "python"
 
+        child_env = os.environ.copy()
+        # Force UTF-8 stdio for detached child processes on Windows.
+        # Without this, Unicode banner output in main.py can crash with
+        # UnicodeEncodeError when no interactive UTF-8 console is attached.
+        child_env.setdefault("PYTHONUTF8", "1")
+        child_env.setdefault("PYTHONIOENCODING", "utf-8")
+
         stdout_log = open(STDOUT_LOG, "w", encoding="utf-8", errors="replace")
         stderr_log = open(STDERR_LOG, "w", encoding="utf-8", errors="replace")
         try:
@@ -96,6 +103,7 @@ def _start_project() -> tuple[bool, str]:
                 stdin=subprocess.DEVNULL,
                 stdout=stdout_log,
                 stderr=stderr_log,
+                env=child_env,
                 creationflags=creationflags,
                 close_fds=True,
             )
