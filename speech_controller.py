@@ -73,7 +73,16 @@ MAX_TYPE_CHARS = 400
 MAX_SCROLL_AMOUNT = 1200
 MAX_WAIT_SECONDS = 5.0
 DEFAULT_WAKE_WORD_MATCH_RATIO = 0.86
+DEFAULT_WAKE_WORD_PREFIX_TOKENS = 2
+DEFAULT_WAKE_WORD_COOLDOWN_S = 1.0
+DEFAULT_WAKE_LISTEN_TIMEOUT_S = 2.0
+DEFAULT_WAKE_PHRASE_LIMIT_S = 2.4
+DEFAULT_COMMAND_PHRASE_LIMIT_S = 6.0
+DEFAULT_ERROR_FEEDBACK_COOLDOWN_S = 6.0
 LOCAL_STEP_WAIT_SECONDS = 0.8
+DEFAULT_VOICE_COMMAND_STALE_S = 4.0
+DEFAULT_VOICE_DUPLICATE_WINDOW_S = 1.4
+DEFAULT_VOICE_MAX_PENDING_COMMANDS = 2
 
 VOICE_TEXT_REPLACEMENTS: tuple[tuple[str, str], ...] = (
     ("you tube", "youtube"),
@@ -114,6 +123,22 @@ SAFE_APP_ALIASES: dict[str, str] = {
     "settings": "ms-settings:",
     "camera": "microsoft.windows.camera:",
     "photos": "ms-photos:",
+}
+APP_DISPLAY_NAMES: dict[str, str] = {
+    "chrome": "Chrome",
+    "google chrome": "Chrome",
+    "edge": "Edge",
+    "microsoft edge": "Edge",
+    "notepad": "Notepad",
+    "calculator": "Calculator",
+    "calc": "Calculator",
+    "paint": "Paint",
+    "mspaint": "Paint",
+    "explorer": "File Explorer",
+    "file explorer": "File Explorer",
+    "settings": "Settings",
+    "camera": "Camera",
+    "photos": "Photos",
 }
 
 BLOCKED_APP_TERMS: tuple[str, ...] = (
@@ -216,6 +241,15 @@ COMPOUND_COMMAND_SEPARATORS: tuple[str, ...] = (
     ";",
     ",",
     " and ",
+)
+WEB_APP_FALLBACK_URLS: dict[str, str] = {
+    "google": "https://www.google.com",
+    "youtube": "https://www.youtube.com",
+}
+GENERIC_PROGRESS_REPLIES: set[str] = {"", "working on it."}
+NO_MATCH_REPLY = (
+    "I didn't understand that. Try something like open chrome, type hello, "
+    "or search AI tools."
 )
 
 
@@ -359,6 +393,54 @@ def _extract_text_after_command(text: str, commands: tuple[str, ...]) -> str:
         if marker in text:
             return text.split(marker, 1)[1].strip(" .")
     return ""
+
+
+def _normalize_request_text(text: str) -> str:
+    cleaned = _clean_voice_text(text)
+    if not cleaned:
+        return ""
+
+    original = cleaned
+    previous = None
+    while cleaned != previous:
+        previous = cleaned
+        cleaned = re.sub(r"^(?:please|hey|ok|okay)\s+", "", cleaned).strip()
+        cleaned = re.sub(r"^(?:can|could|would|will)\s+you\s+", "", cleaned).strip()
+        cleaned = re.sub(r"^(?:i want you to|i need you to|help me(?: to)?)\s+", "", cleaned).strip()
+
+    if any(
+        cleaned.startswith(prefix)
+        for prefix in ("type ", "write ", "input ", "enter text ")
+    ):
+        return cleaned
+
+    cleaned = re.sub(r"\s+(?:for me|please)$", "", cleaned).strip()
+
+    cleaned = re.sub(r"\blook up\b", "search", cleaned)
+    cleaned = re.sub(r"\bsearch up\b", "search", cleaned)
+    cleaned = re.sub(r"\bgo to\b", "open", cleaned)
+    cleaned = re.sub(r"\bopen up\b", "open", cleaned)
+    cleaned = re.sub(r"\bbring up\b", "open", cleaned)
+    cleaned = re.sub(r"\blaunch\b", "open", cleaned)
+    cleaned = re.sub(
+        r"\bstart\b(?=\s+(?:chrome|google chrome|edge|microsoft edge|notepad|calculator|calc|paint|mspaint|explorer|file explorer|settings|camera|photos)\b)",
+        "open",
+        cleaned,
+    )
+    cleaned = re.sub(r"\bwrite down\b", "type", cleaned)
+
+    youtube_match = re.fullmatch(r"search\s+(.+?)\s+on youtube", cleaned)
+    if youtube_match:
+        cleaned = f"open youtube and search {youtube_match.group(1).strip()}"
+
+    google_match = re.fullmatch(r"search\s+(.+?)\s+on google", cleaned)
+    if google_match:
+        cleaned = f"search {google_match.group(1).strip()}"
+
+    if cleaned != original:
+        logger.debug("Normalized request text '%s' -> '%s'", original, cleaned)
+
+    return cleaned
 
 
 def _step_needs_focus_wait(step: dict[str, Any]) -> bool:
@@ -812,6 +894,42 @@ def _normalize_step(step: Any) -> Optional[dict[str, Any]]:
     return normalized
 
 
+def _postprocess_plan_steps(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    processed: list[dict[str, Any]] = []
+
+    for step in steps:
+        current = dict(step)
+
+        if current.get("action") == "launch_app":
+            app_name = current.get("app", "")
+            if app_name in WEB_APP_FALLBACK_URLS:
+                current = {"action": "open_url", "url": WEB_APP_FALLBACK_URLS[app_name]}
+
+        if processed:
+            previous = processed[-1]
+
+            if (
+                previous.get("action") == "launch_app"
+                and previous.get("app") in BROWSER_APPS
+                and current.get("action") == "open_url"
+            ):
+                processed.pop()
+                previous = processed[-1] if processed else None
+
+            if previous and _step_needs_focus_wait(current):
+                if previous.get("action") in {"launch_app", "open_url"}:
+                    if previous.get("action") != "wait":
+                        processed.append(
+                            {"action": "wait", "seconds": LOCAL_STEP_WAIT_SECONDS}
+                        )
+
+        processed.append(current)
+        if len(processed) >= MAX_PLAN_STEPS:
+            break
+
+    return processed[:MAX_PLAN_STEPS]
+
+
 def _normalize_plan(plan: Optional[dict[str, Any]]) -> dict[str, Any]:
     if not isinstance(plan, dict):
         return _default_plan()
@@ -831,6 +949,8 @@ def _normalize_plan(plan: Optional[dict[str, Any]]) -> dict[str, Any]:
         normalized = _normalize_step(raw_step)
         if normalized:
             steps.append(normalized)
+
+    steps = _postprocess_plan_steps(steps)
 
     if decision == "allow" and not steps:
         decision = "noop"
@@ -884,6 +1004,13 @@ Rules:
 - Only use the listed actions.
 - Prefer open_url for websites and search requests.
 - Prefer Google or YouTube search URLs for web searches.
+- Understand natural spoken phrasing and ignore filler words like please,
+  can you, help me, or for me when the intent is clear.
+- If the user asks for a multi-step task, return multiple steps in order.
+- If typing or hotkeys should happen after opening an app or page, include a
+  short wait step first.
+- Do not open a browser homepage and then open a URL for the same task; prefer
+  one direct open_url step when that is enough.
 - launch_app is only for common safe Windows apps like chrome, edge, notepad,
   calculator, paint, explorer, settings, camera, or photos.
 - If the user requests destructive, secretive, shell, terminal, registry,
@@ -941,6 +1068,47 @@ JSON:
   "reply": "Opening chrome.",
   "steps": [
     {{"action": "launch_app", "app": "chrome"}}
+  ]
+}}
+
+Request: could you please open youtube and search coding music for me
+JSON:
+{{
+  "decision": "allow",
+  "summary": "Open YouTube search",
+  "reply": "Opening YouTube search.",
+  "steps": [
+    {{
+      "action": "open_url",
+      "url": "https://www.youtube.com/results?search_query=coding+music"
+    }}
+  ]
+}}
+
+Request: open notepad and type hello world
+JSON:
+{{
+  "decision": "allow",
+  "summary": "Open notepad and type text",
+  "reply": "Working on it.",
+  "steps": [
+    {{"action": "launch_app", "app": "notepad"}},
+    {{"action": "wait", "seconds": 0.8}},
+    {{"action": "type_text", "text": "hello world"}}
+  ]
+}}
+
+Request: search accessibility tips on youtube
+JSON:
+{{
+  "decision": "allow",
+  "summary": "Open YouTube search",
+  "reply": "Searching YouTube for accessibility tips.",
+  "steps": [
+    {{
+      "action": "open_url",
+      "url": "https://www.youtube.com/results?search_query=accessibility+tips"
+    }}
   ]
 }}
 
@@ -1018,11 +1186,12 @@ def plan_task(
     drag_mode: bool = False,
 ) -> dict[str, Any]:
     """Plan a free-form command via the local brain."""
-    local_plan = _plan_task_locally(cmd)
+    normalized_cmd = _normalize_request_text(cmd)
+    local_plan = _plan_task_locally(normalized_cmd)
     if local_plan is not None:
         logger.debug(
             "Using local voice plan for '%s' -> %s",
-            cmd,
+            normalized_cmd or cmd,
             local_plan.get("summary", "local"),
         )
         return local_plan
@@ -1030,19 +1199,19 @@ def plan_task(
     if brain is None:
         return _default_plan(
             reply=(
-                "I can hear you, but I need the local brain for that request. "
-                "Start Ollama first."
+                "I didn't understand that in rule mode. Try a simpler command like "
+                "open chrome or type hello, or start Ollama for more natural requests."
             )
         )
 
-    raw_plan = brain.plan(cmd, drag_mode=drag_mode)
+    raw_plan = brain.plan(normalized_cmd or cmd, drag_mode=drag_mode)
     if not raw_plan:
         return _default_plan(
             reply=brain.last_error
             or "I heard you, but I could not understand that request safely."
         )
 
-    logger.debug("Using Ollama voice plan for '%s'", cmd)
+    logger.debug("Using Ollama voice plan for '%s'", normalized_cmd or cmd)
     return _normalize_plan(raw_plan)
 
 
@@ -1225,6 +1394,45 @@ class VoiceController:
             minimum=0.75,
             maximum=0.98,
         )
+        self.wake_word_prefix_tokens = _clamp_int(
+            os.environ.get("WAKE_WORD_PREFIX_TOKENS", DEFAULT_WAKE_WORD_PREFIX_TOKENS),
+            default=DEFAULT_WAKE_WORD_PREFIX_TOKENS,
+            minimum=1,
+            maximum=4,
+        )
+        self.wake_word_cooldown_s = _clamp_float(
+            os.environ.get("WAKE_WORD_COOLDOWN_S", DEFAULT_WAKE_WORD_COOLDOWN_S),
+            default=DEFAULT_WAKE_WORD_COOLDOWN_S,
+            minimum=0.0,
+            maximum=5.0,
+        )
+        self.listen_timeout_s = _clamp_float(
+            os.environ.get("WAKE_LISTEN_TIMEOUT_S", DEFAULT_WAKE_LISTEN_TIMEOUT_S),
+            default=DEFAULT_WAKE_LISTEN_TIMEOUT_S,
+            minimum=1.0,
+            maximum=6.0,
+        )
+        self.wake_phrase_limit_s = _clamp_float(
+            os.environ.get("WAKE_PHRASE_LIMIT_S", DEFAULT_WAKE_PHRASE_LIMIT_S),
+            default=DEFAULT_WAKE_PHRASE_LIMIT_S,
+            minimum=1.0,
+            maximum=6.0,
+        )
+        self.command_phrase_limit_s = _clamp_float(
+            os.environ.get("COMMAND_PHRASE_LIMIT_S", DEFAULT_COMMAND_PHRASE_LIMIT_S),
+            default=DEFAULT_COMMAND_PHRASE_LIMIT_S,
+            minimum=2.0,
+            maximum=10.0,
+        )
+        self.error_feedback_cooldown_s = _clamp_float(
+            os.environ.get(
+                "VOICE_ERROR_FEEDBACK_COOLDOWN_S",
+                DEFAULT_ERROR_FEEDBACK_COOLDOWN_S,
+            ),
+            default=DEFAULT_ERROR_FEEDBACK_COOLDOWN_S,
+            minimum=2.0,
+            maximum=20.0,
+        )
 
         available_names = list_microphone_names()
         if self.mic_index is None:
@@ -1251,6 +1459,9 @@ class VoiceController:
         self.last_matched: str = ""
         self.last_heard_time: float = 0.0
         self.awaiting_command_until: float = 0.0
+        self._last_wake_time: float = 0.0
+        self._last_feedback_time: float = 0.0
+        self._awaiting_feedback_sent = False
 
         self.recognizer.energy_threshold = energy_threshold
         self.recognizer.dynamic_energy_threshold = True
@@ -1271,10 +1482,12 @@ class VoiceController:
                 )
             logger.info("Microphone calibrated.")
             logger.info(
-                "Voice recognizer ready (device_index=%s, device_name=%s, energy_threshold=%.2f)",
+                "Voice recognizer ready (device_index=%s, device_name=%s, energy_threshold=%.2f, wake_phrase_limit=%.2fs, command_phrase_limit=%.2fs)",
                 self.mic_index,
                 self.mic_name or "default",
                 self.recognizer.energy_threshold,
+                self.wake_phrase_limit_s,
+                self.command_phrase_limit_s,
             )
             print("[Voice] Microphone ready.")
             print(f"[Voice] Wake word: '{self.wake_word}'")
@@ -1286,12 +1499,14 @@ class VoiceController:
         self._thread = threading.Thread(target=self._listen_loop, daemon=True)
         self._thread.start()
 
-    def _token_matches_wake_word(self, token: str) -> bool:
+    def _token_matches_wake_word(self, token: str, allow_fuzzy: bool = True) -> bool:
         candidate = _clean_voice_text(token)
         if not candidate:
             return False
         if candidate == self.wake_word or candidate in self.wake_word_aliases:
             return True
+        if not allow_fuzzy:
+            return False
         if abs(len(candidate) - len(self.wake_word)) > 1:
             return False
         similarity = difflib.SequenceMatcher(None, candidate, self.wake_word).ratio()
@@ -1308,12 +1523,38 @@ class VoiceController:
     def _extract_after_wake_word(self, text: str) -> tuple[bool, str]:
         tokens = text.split()
         for index, token in enumerate(tokens):
-            if self._token_matches_wake_word(token):
+            allow_fuzzy = index < self.wake_word_prefix_tokens
+            if self._token_matches_wake_word(token, allow_fuzzy=allow_fuzzy):
                 remainder = tokens[index + 1 :]
-                while remainder and self._token_matches_wake_word(remainder[0]):
+                while remainder and self._token_matches_wake_word(
+                    remainder[0],
+                    allow_fuzzy=False,
+                ):
                     remainder = remainder[1:]
                 return True, " ".join(remainder).strip()
         return False, ""
+
+    def _maybe_speak_feedback(self, text: str, now: Optional[float] = None) -> None:
+        current_time = time.time() if now is None else now
+        if current_time - self._last_feedback_time < self.error_feedback_cooldown_s:
+            return
+        self._last_feedback_time = current_time
+        if self.assistant and text:
+            self.assistant.say(text)
+
+    def _expire_command_window(self, now: Optional[float] = None) -> None:
+        current_time = time.time() if now is None else now
+        if not self.awaiting_command_until or current_time < self.awaiting_command_until:
+            return
+
+        self.awaiting_command_until = 0.0
+        if not self._awaiting_feedback_sent:
+            self._maybe_speak_feedback(
+                "I didn't catch that. Say the wake word again and try once more.",
+                now=current_time,
+            )
+            self._awaiting_feedback_sent = True
+        self.last_matched = ""
 
     def _pick_transcript_candidate(self, transcripts: list[str]) -> str:
         cleaned_candidates: list[str] = []
@@ -1343,8 +1584,11 @@ class VoiceController:
         if not cleaned:
             return None
 
+        self._expire_command_window(now)
+
         if now < self.awaiting_command_until:
             self.awaiting_command_until = 0.0
+            self._awaiting_feedback_sent = False
             self.last_matched = cleaned
             return cleaned
 
@@ -1356,7 +1600,16 @@ class VoiceController:
             self.last_matched = remainder
             return remainder
 
+        if now - self._last_wake_time < self.wake_word_cooldown_s:
+            logger.debug(
+                "Ignored repeated wake word within cooldown (%.2fs)",
+                self.wake_word_cooldown_s,
+            )
+            return None
+
+        self._last_wake_time = now
         self.awaiting_command_until = now + self.command_window_s
+        self._awaiting_feedback_sent = False
         self.last_matched = self.wake_word
         logger.info("Wake word detected.")
         print(f"[Voice] Wake word detected: '{self.wake_word}'")
@@ -1367,12 +1620,21 @@ class VoiceController:
     def _listen_loop(self) -> None:
         while not self.stopped:
             try:
+                self._expire_command_window()
                 self.listening = True
+                phrase_time_limit = (
+                    self.command_phrase_limit_s
+                    if time.time() < self.awaiting_command_until
+                    else self.wake_phrase_limit_s
+                )
                 with self.mic as source:
                     audio = self.recognizer.listen(
-                        source, timeout=4, phrase_time_limit=6
+                        source,
+                        timeout=self.listen_timeout_s,
+                        phrase_time_limit=phrase_time_limit,
                     )
                 self.listening = False
+                transcripts: list[str] = []
                 try:
                     recognition = self.recognizer.recognize_google(
                         audio,
@@ -1417,15 +1679,18 @@ class VoiceController:
 
             except (sr.WaitTimeoutError, sr.UnknownValueError):
                 self.listening = False
+                self._expire_command_window()
             except sr.RequestError as exc:
                 self.listening = False
                 self.last_error = f"Speech API error: {exc}"
                 logger.error("Google Speech API error: %s", exc)
+                self._maybe_speak_feedback("The speech service is not responding right now.")
                 time.sleep(2)
             except Exception as exc:
                 self.listening = False
                 self.last_error = str(exc)
                 logger.exception("Unexpected voice recognition failure")
+                self._maybe_speak_feedback("Voice recognition ran into a problem.")
 
     def get_command(self) -> Optional[str]:
         """Return the next wake-word-authorized command, or ``None``."""
@@ -1436,6 +1701,7 @@ class VoiceController:
 
     def get_status_text(self) -> str:
         """Short device or wake-word summary for logs or HUD."""
+        self._expire_command_window()
         if self.last_error:
             return self.last_error
         if time.time() < self.awaiting_command_until:
@@ -1452,6 +1718,12 @@ class PendingVoicePlan:
     utterance: str
     plan: dict[str, Any]
     expires_at: float
+
+
+@dataclass
+class QueuedVoiceCommand:
+    text: str
+    received_at: float
 
 
 class VoiceCommandProcessor:
@@ -1471,15 +1743,197 @@ class VoiceCommandProcessor:
         self.drag_mode = False
         self.pending_plan: Optional[PendingVoicePlan] = None
         self.last_status = "Ready"
+        self.command_stale_s = _clamp_float(
+            os.environ.get("VOICE_COMMAND_STALE_S", DEFAULT_VOICE_COMMAND_STALE_S),
+            default=DEFAULT_VOICE_COMMAND_STALE_S,
+            minimum=0.5,
+            maximum=30.0,
+        )
+        self.duplicate_window_s = _clamp_float(
+            os.environ.get(
+                "VOICE_DUPLICATE_WINDOW_S",
+                DEFAULT_VOICE_DUPLICATE_WINDOW_S,
+            ),
+            default=DEFAULT_VOICE_DUPLICATE_WINDOW_S,
+            minimum=0.2,
+            maximum=10.0,
+        )
+        self.max_pending_commands = _clamp_int(
+            os.environ.get(
+                "VOICE_MAX_PENDING_COMMANDS",
+                DEFAULT_VOICE_MAX_PENDING_COMMANDS,
+            ),
+            default=DEFAULT_VOICE_MAX_PENDING_COMMANDS,
+            minimum=1,
+            maximum=8,
+        )
+        self._work_q: queue.Queue[Optional[QueuedVoiceCommand]] = queue.Queue()
+        self._busy = False
+        self._stopped = False
+        self._pending_exit = False
+        self._queue_lock = threading.Lock()
+        self._last_submitted_text = ""
+        self._last_submitted_at = 0.0
+        self._thread = threading.Thread(target=self._worker, daemon=True)
+        self._thread.start()
+
+    @property
+    def is_busy(self) -> bool:
+        return self._busy
 
     def _speak(self, text: str) -> None:
         if self.assistant and text:
             self.assistant.say(text)
 
+    def _format_app_name(self, app_name: str) -> str:
+        cleaned = _clean_voice_text(app_name)
+        return APP_DISPLAY_NAMES.get(cleaned, cleaned.title() or "that app")
+
+    def _describe_hotkey(self, keys: list[str]) -> str:
+        if not keys:
+            return "that shortcut"
+        names = {
+            "ctrl": "Control",
+            "alt": "Alt",
+            "shift": "Shift",
+            "win": "Windows",
+            "esc": "Escape",
+            "pgup": "Page Up",
+            "pgdn": "Page Down",
+        }
+        return " + ".join(names.get(key, key.upper() if len(key) == 1 else key.title()) for key in keys)
+
+    def _plan_intro_message(self, plan: dict[str, Any], reply: str) -> str:
+        cleaned_reply = (reply or "").strip()
+        if cleaned_reply.lower() not in GENERIC_PROGRESS_REPLIES:
+            return cleaned_reply
+
+        steps = plan.get("steps", [])
+        if not steps:
+            return cleaned_reply
+
+        first_step = steps[0]
+        action = first_step.get("action")
+        if action == "launch_app":
+            return f"Opening {self._format_app_name(first_step.get('app', ''))}."
+        if action == "open_url":
+            url = first_step.get("url", "")
+            if "youtube.com/results" in url:
+                return "Opening YouTube search."
+            if "google.com/search" in url:
+                return "Searching Google."
+            if "youtube.com" in url:
+                return "Opening YouTube."
+            if "google.com" in url:
+                return "Opening Google."
+            return "Opening that page."
+        if action == "type_text":
+            return "Typing now."
+        if action == "press_key":
+            return f"Pressing {first_step.get('key', 'that key')}."
+        if action == "hotkey":
+            return f"Using {self._describe_hotkey(first_step.get('keys', []))}."
+        if action == "scroll":
+            direction = first_step.get("direction", "down")
+            return f"Scrolling {direction}."
+        if action == "drag_toggle":
+            return "Updating drag mode."
+        if action == "left_click":
+            return "Clicking."
+        if action == "right_click":
+            return "Right clicking."
+        if action == "double_click":
+            return "Double clicking."
+        return cleaned_reply
+
+    def _plan_completion_message(self, plan: dict[str, Any]) -> str:
+        steps = plan.get("steps", [])
+        if not steps:
+            return ""
+        actions = [step.get("action") for step in steps]
+        if "stop" in actions:
+            return ""
+        if "type_text" in actions:
+            return "Typing completed."
+        if len(steps) > 1:
+            return "Done."
+        if actions[0] == "launch_app":
+            return f"{self._format_app_name(steps[0].get('app', ''))} is ready."
+        return ""
+
+    def _action_failure_message(self, step: dict[str, Any]) -> str:
+        action = step.get("action")
+        if action == "launch_app":
+            return "I couldn't open that app."
+        if action == "open_url":
+            return "I couldn't open that page."
+        if action == "type_text":
+            return "I couldn't finish typing that."
+        if action == "hotkey":
+            return "I couldn't use that shortcut."
+        if action == "press_key":
+            return "I couldn't press that key."
+        return "That action failed. Please try again."
+
+    def _no_match_reply(self, reply: str) -> str:
+        cleaned_reply = (reply or "").strip()
+        return cleaned_reply or NO_MATCH_REPLY
+
+    def _drop_pending_commands_locked(self) -> int:
+        dropped = 0
+        while self._work_q.qsize() >= self.max_pending_commands:
+            try:
+                pending = self._work_q.get_nowait()
+            except queue.Empty:
+                break
+
+            if pending is None:
+                self._work_q.put_nowait(None)
+                break
+
+            dropped += 1
+            self._work_q.task_done()
+            logger.warning(
+                "Dropped older queued voice command to keep the latest request: '%s'",
+                pending.text,
+            )
+
+        return dropped
+
+    def _worker(self) -> None:
+        while not self._stopped:
+            try:
+                queued = self._work_q.get(timeout=0.3)
+            except queue.Empty:
+                continue
+
+            if queued is None:
+                self._work_q.task_done()
+                break
+
+            self._busy = True
+            try:
+                age_s = time.time() - queued.received_at
+                if age_s > self.command_stale_s:
+                    self.last_status = "Dropped stale"
+                    logger.warning(
+                        "Dropped stale voice command (age=%.2fs): '%s'",
+                        age_s,
+                        queued.text,
+                    )
+                    continue
+
+                if self._handle_sync(queued.text):
+                    self._pending_exit = True
+            finally:
+                self._busy = False
+                self._work_q.task_done()
+
     def _clear_pending_if_expired(self) -> None:
         if self.pending_plan and time.time() > self.pending_plan.expires_at:
             self.pending_plan = None
             self.last_status = "Confirmation expired"
+            self._speak("Confirmation timed out.")
 
     def _looks_blocked(self, combined_text: str) -> bool:
         return any(term in combined_text for term in BLOCKED_REQUEST_TERMS)
@@ -1528,8 +1982,8 @@ class VoiceCommandProcessor:
                 if _resolve_app_target(app_name) is None:
                     return (
                         "block",
-                        "I can only open a few safe apps like Notepad, Calculator, "
-                        "Paint, Explorer, Settings, Camera, or Photos.",
+                        "I can only open a few safe apps like Chrome, Edge, Notepad, "
+                        "Calculator, Paint, Explorer, Settings, Camera, or Photos.",
                     )
             if action == "hotkey":
                 keys = tuple(sorted(step.get("keys", [])))
@@ -1555,7 +2009,7 @@ class VoiceCommandProcessor:
 
         return "allow", plan["reply"]
 
-    def _execute_plan(self, plan: dict[str, Any]) -> bool:
+    def _execute_plan(self, plan: dict[str, Any]) -> tuple[bool, bool]:
         should_exit = False
 
         for step in plan["steps"]:
@@ -1623,18 +2077,26 @@ class VoiceCommandProcessor:
             except Exception:
                 self.last_status = "Action failed"
                 logger.exception("Voice step failed: %s", step)
-                self._speak("That action failed. Please try again.")
-                return False
+                self._speak(self._action_failure_message(step))
+                return False, False
 
-        return should_exit
+        completion_message = self._plan_completion_message(plan)
+        if completion_message:
+            self._speak(completion_message)
+
+        return True, should_exit
 
     def get_status_text(self) -> str:
         self._clear_pending_if_expired()
+        if self._busy:
+            return "Task: processing"
+        if not self._work_q.empty():
+            return "Task: queued"
         if self.pending_plan:
             return "Task: waiting confirm"
         return f"Task: {self.last_status.lower()}"
 
-    def handle(self, cmd: str) -> bool:
+    def _handle_sync(self, cmd: str) -> bool:
         """Process one wake-word-authorized command. Returns True to exit."""
         text = _clean_voice_text(cmd)
         if not text:
@@ -1648,7 +2110,8 @@ class VoiceCommandProcessor:
                 self.pending_plan = None
                 self.last_status = "Confirmed"
                 self._speak("Confirmed.")
-                return self._execute_plan(pending.plan)
+                _, should_exit = self._execute_plan(pending.plan)
+                return should_exit
 
             if _matches_phrase(text, NO_WORDS):
                 self.pending_plan = None
@@ -1661,12 +2124,7 @@ class VoiceCommandProcessor:
 
         plan = plan_task(text, self.brain, drag_mode=self.drag_mode)
         decision, reply = self._assess_security(text, plan)
-
-        print("\n==== DEBUG ====")
-        print("COMMAND:", text)
-        print("PLAN:", plan)
-        print("DECISION:", decision)
-        print("================\n")
+        logger.debug("Voice decision for '%s': %s | %s", text, decision, plan)
 
         if decision == "block":
             self.last_status = "Blocked"
@@ -1677,8 +2135,7 @@ class VoiceCommandProcessor:
         if decision == "noop":
             self.last_status = "No match"
             logger.info("No safe voice action for: '%s'", text)
-            if reply:
-                self._speak(reply)
+            self._speak(self._no_match_reply(reply))
             return False
 
         if decision == "confirm":
@@ -1696,6 +2153,55 @@ class VoiceCommandProcessor:
             return False
 
         self.last_status = plan.get("summary", "Executed") or "Executed"
-        if reply:
-            self._speak(reply)
-        return self._execute_plan(plan)
+        intro_message = self._plan_intro_message(plan, reply)
+        if intro_message:
+            self._speak(intro_message)
+        _, should_exit = self._execute_plan(plan)
+        return should_exit
+
+    def submit(self, cmd: str) -> None:
+        text = _clean_voice_text(cmd)
+        if not text or self._stopped:
+            return
+
+        now = time.time()
+        with self._queue_lock:
+            if (
+                text == self._last_submitted_text
+                and (now - self._last_submitted_at) < self.duplicate_window_s
+                and (self._busy or not self._work_q.empty())
+            ):
+                self.last_status = "Skipped duplicate"
+                logger.info("Skipped duplicate queued voice command: '%s'", text)
+                return
+
+            dropped = self._drop_pending_commands_locked()
+            if dropped:
+                self.last_status = "Replaced queued"
+                logger.info(
+                    "Replaced %d older queued voice command(s) with '%s'.",
+                    dropped,
+                    text,
+                )
+
+            self._work_q.put(QueuedVoiceCommand(text=text, received_at=now))
+            self._last_submitted_text = text
+            self._last_submitted_at = now
+            self.last_status = "Queued"
+
+    def poll_should_exit(self) -> bool:
+        if not self._pending_exit:
+            return False
+        self._pending_exit = False
+        return True
+
+    def handle(self, cmd: str) -> bool:
+        """Backward-compatible synchronous command handling."""
+        return self._handle_sync(cmd)
+
+    def stop(self) -> None:
+        if self._stopped:
+            return
+        self._stopped = True
+        self._work_q.put_nowait(None)
+        self._thread.join(timeout=1.5)
