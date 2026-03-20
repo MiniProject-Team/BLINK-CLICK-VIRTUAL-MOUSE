@@ -58,6 +58,10 @@ logging.basicConfig(
 logger = logging.getLogger("main")
 WINDOW_TITLE = "Blink-Click Virtual Mouse  |  Accessibility Edition"
 EXIT_CONFIRM_WINDOW_S = 1.5
+STOP_BUTTON_X = 14
+STOP_BUTTON_Y = 14
+STOP_BUTTON_W = 110
+STOP_BUTTON_H = 36
 
 
 # ================================================================
@@ -129,6 +133,34 @@ def _apply_mouse_runtime_overrides(cfg: MouseConfig) -> None:
         cfg.blink_release_margin,
     )
     cfg.click_cooldown_s = _env_float("CLICK_COOLDOWN_S", cfg.click_cooldown_s)
+
+
+def _draw_stop_button(frame, hover: bool) -> tuple[int, int, int, int]:
+    """Draw a clickable stop button in the camera window and return its rect."""
+    x1, y1 = STOP_BUTTON_X, STOP_BUTTON_Y
+    x2, y2 = x1 + STOP_BUTTON_W, y1 + STOP_BUTTON_H
+
+    if hover:
+        bg_color = (40, 40, 230)
+        border_color = (70, 90, 255)
+    else:
+        bg_color = (20, 20, 180)
+        border_color = (50, 70, 240)
+
+    cv2.rectangle(frame, (x1, y1), (x2, y2), bg_color, -1)
+    cv2.rectangle(frame, (x1, y1), (x2, y2), border_color, 2)
+    cv2.putText(
+        frame,
+        "STOP",
+        (x1 + 24, y1 + 24),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.62,
+        (255, 255, 255),
+        2,
+        cv2.LINE_AA,
+    )
+
+    return x1, y1, x2, y2
 
 
 # ================================================================
@@ -263,6 +295,25 @@ def main() -> None:
     # ── Banner ───────────────────────────────────────────────────
     _print_banner(assistant, voice, brain, cfg)
 
+    stop_button_state = {
+        "rect": (0, 0, 0, 0),
+        "hover": False,
+        "clicked": False,
+    }
+
+    def _on_window_mouse(event, x, y, flags, param) -> None:
+        _ = (flags, param)
+        x1, y1, x2, y2 = stop_button_state["rect"]
+        inside = x1 <= x <= x2 and y1 <= y <= y2
+
+        if event == cv2.EVENT_MOUSEMOVE:
+            stop_button_state["hover"] = inside
+        elif event == cv2.EVENT_LBUTTONDOWN and inside:
+            stop_button_state["clicked"] = True
+
+    cv2.namedWindow(WINDOW_TITLE)
+    cv2.setMouseCallback(WINDOW_TITLE, _on_window_mouse)
+
     # ── Main loop ────────────────────────────────────────────────
     try:
         while True:
@@ -384,9 +435,22 @@ def main() -> None:
                 fps_count = 0
                 fps_time = now
 
+            # ── STOP BUTTON ──────────────────────────────────────
+            stop_button_state["rect"] = _draw_stop_button(
+                frame,
+                hover=bool(stop_button_state["hover"]),
+            )
+
             # ── SHOW ─────────────────────────────────────────────
             cv2.imshow(WINDOW_TITLE, frame)
             key = cv2.waitKey(1) & 0xFF
+
+            if stop_button_state["clicked"]:
+                logger.info("Stop button clicked. Exiting application.")
+                if assistant:
+                    assistant.say("Stopping")
+                break
+
             if key == 27:
                 if now <= exit_armed_until:
                     logger.info("Escape pressed twice. Exiting application.")

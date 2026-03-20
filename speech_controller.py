@@ -251,6 +251,8 @@ NO_MATCH_REPLY = (
     "I didn't understand that. Try something like open chrome, type hello, "
     "or search AI tools."
 )
+QUESTION_THINKING_REPLY = "Let me think."
+QUESTION_UNAVAILABLE_REPLY = "I could not get an answer right now. Please try again."
 
 
 def _extract_json_object(text: str) -> Optional[dict[str, Any]]:
@@ -1179,6 +1181,85 @@ User request: {utterance}
         self.last_error = "The local brain returned an invalid plan."
         return None
 
+    def answer_question(self, utterance: str) -> Optional[str]:
+        """Return a short spoken answer for general user questions."""
+        prompt = f"""
+You are a helpful voice assistant for accessibility software.
+Answer the user question in plain English, short and clear.
+Keep it to 1-2 sentences and avoid markdown or bullet points.
+If unsure, say you are not fully sure instead of inventing details.
+
+User question: {utterance}
+""".strip()
+
+        payload = {
+            "model": self.model,
+            "prompt": prompt,
+            "stream": False,
+            "options": {"temperature": 0.2},
+        }
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            url=f"{self.host}/api/generate",
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
+                body = resp.read().decode("utf-8", errors="ignore")
+        except urllib.error.URLError as exc:
+            logger.warning("Ollama Q&A not reachable: %s", exc)
+            return None
+        except Exception as exc:
+            logger.warning("Ollama Q&A failed: %s", exc)
+            return None
+
+        wrapper = _extract_json_object(body)
+        if not wrapper:
+            return None
+
+        response_text = wrapper.get("response", "")
+        if not isinstance(response_text, str):
+            return None
+
+        cleaned = response_text.strip().replace("\n", " ")
+        cleaned = re.sub(r"\s+", " ", cleaned)
+        return cleaned[:320] if cleaned else None
+
+
+def _looks_like_question(text: str) -> bool:
+    """Heuristic to route general knowledge questions to the local brain."""
+    cleaned = _clean_voice_text(text)
+    if not cleaned:
+        return False
+
+    question_prefixes = (
+        "what ",
+        "why ",
+        "how ",
+        "who ",
+        "when ",
+        "where ",
+        "which ",
+        "whom ",
+        "whose ",
+        "is ",
+        "are ",
+        "can ",
+        "could ",
+        "do ",
+        "does ",
+        "did ",
+        "will ",
+        "would ",
+        "should ",
+        "tell me ",
+        "explain ",
+    )
+    return cleaned.startswith(question_prefixes)
+
 
 def plan_task(
     cmd: str,
@@ -1879,6 +1960,9 @@ class VoiceCommandProcessor:
         cleaned_reply = (reply or "").strip()
         return cleaned_reply or NO_MATCH_REPLY
 
+    def _question_thinking_reply(self) -> str:
+        return QUESTION_THINKING_REPLY
+
     def _drop_pending_commands_locked(self) -> int:
         dropped = 0
         while self._work_q.qsize() >= self.max_pending_commands:
@@ -2133,6 +2217,21 @@ class VoiceCommandProcessor:
             return False
 
         if decision == "noop":
+            if self.brain and (_looks_like_question(text) or not plan.get("steps")):
+                self.last_status = "Answering"
+                self._speak(self._question_thinking_reply())
+                answer = self.brain.answer_question(text)
+                if answer:
+                    self.last_status = "Answered"
+                    logger.info("Answered via local brain: '%s'", text)
+                    self._speak(answer)
+                    return False
+
+                self.last_status = "Answer failed"
+                logger.info("Local brain did not return an answer for: '%s'", text)
+                self._speak(QUESTION_UNAVAILABLE_REPLY)
+                return False
+
             self.last_status = "No match"
             logger.info("No safe voice action for: '%s'", text)
             self._speak(self._no_match_reply(reply))
