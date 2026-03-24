@@ -77,7 +77,7 @@ DEFAULT_WAKE_WORD_PREFIX_TOKENS = 2
 DEFAULT_WAKE_WORD_COOLDOWN_S = 1.0
 DEFAULT_WAKE_LISTEN_TIMEOUT_S = 2.0
 DEFAULT_WAKE_PHRASE_LIMIT_S = 2.4
-DEFAULT_COMMAND_PHRASE_LIMIT_S = 6.0
+DEFAULT_COMMAND_PHRASE_LIMIT_S = 12.0
 DEFAULT_ERROR_FEEDBACK_COOLDOWN_S = 6.0
 LOCAL_STEP_WAIT_SECONDS = 0.8
 DEFAULT_VOICE_COMMAND_STALE_S = 4.0
@@ -1443,9 +1443,9 @@ class VoiceController:
     def __init__(
         self,
         assistant: Optional[AssistantVoice] = None,
-        energy_threshold: int = 350,
-        pause_threshold: float = 0.6,
-        phrase_threshold: float = 0.3,
+        energy_threshold: int = 300,
+        pause_threshold: float = 0.4,
+        phrase_threshold: float = 0.1,
         calibration_duration: float = 2.5,
         microphone_index: Optional[int] = None,
         microphone_name: Optional[str] = None,
@@ -1546,8 +1546,8 @@ class VoiceController:
 
         self.recognizer.energy_threshold = energy_threshold
         self.recognizer.dynamic_energy_threshold = True
-        self.recognizer.dynamic_energy_adjustment_damping = 0.2
-        self.recognizer.dynamic_energy_adjustment_ratio = 1.5
+        self.recognizer.dynamic_energy_adjustment_damping = 0.15
+        self.recognizer.dynamic_energy_adjustment_ratio = 1.3
         self.recognizer.pause_threshold = pause_threshold
         self.recognizer.phrase_threshold = phrase_threshold
         self.recognizer.non_speaking_duration = pause_threshold

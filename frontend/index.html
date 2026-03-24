@@ -1,20 +1,207 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta
-      name="viewport"
-      content="width=device-width, initial-scale=1.0"
-    />
-    <title>Blink Click Virtual Mouse</title>
-    <meta
-      name="description"
-      content="A hands-free accessibility assistant with head control, blink actions, and guided voice support."
-    />
-    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.jsx"></script>
-  </body>
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Eye Click</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet"/>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+:root{
+  --bg:#030712;--accent:#22d3ee;--accent2:#a78bfa;
+  --success:#34d399;--danger:#f87171;--muted:#475569;
+  --card:#0f1a2e;--border:rgba(34,211,238,0.15);
+  --orange:#fb923c;--text:#e2e8f0;
+  --font:'Space Grotesk',sans-serif;--mono:'Fira Code',monospace;
+}
+html,body{background:var(--bg);color:var(--text);font-family:var(--font);}
+#root{position:relative;min-height:100vh;overflow-x:hidden;}
+canvas#ac{position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:0;}
+.hex-grid{position:fixed;inset:0;z-index:0;pointer-events:none;opacity:.06;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='56' height='100'%3E%3Cpath d='M28 0 L56 16 L56 50 L28 66 L0 50 L0 16Z' fill='none' stroke='%2322d3ee' stroke-width='0.8'/%3E%3Cpath d='M28 66 L56 82 L56 116 L28 132 L0 116 L0 82Z' fill='none' stroke='%2322d3ee' stroke-width='0.8'/%3E%3C/svg%3E");
+  animation:hpulse 5s ease-in-out infinite;}
+@keyframes hpulse{0%,100%{opacity:.04}50%{opacity:.10}}
+.page{position:relative;z-index:3;max-width:860px;margin:0 auto;padding:52px 36px 64px;display:flex;flex-direction:column;align-items:center;}
+.title-section{text-align:center;margin-bottom:32px;animation:fadeUp .8s cubic-bezier(.16,1,.3,1) both;}
+.badge{display:inline-block;background:rgba(34,211,238,0.1);color:var(--accent);font-family:var(--mono);font-size:10px;font-weight:500;letter-spacing:.12em;text-transform:uppercase;border:1px solid rgba(34,211,238,0.25);border-radius:99px;padding:4px 14px;margin-bottom:16px;}
+h1{font-size:clamp(3rem,8vw,5rem);font-weight:700;line-height:1.0;margin-bottom:14px;
+  background:linear-gradient(135deg,#e2f8ff 0%,#22d3ee 30%,#a78bfa 65%,#34d399 100%);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;
+  animation:auroraShimmer 6s ease-in-out infinite;}
+@keyframes auroraShimmer{
+  0%{filter:brightness(1) hue-rotate(0deg)}
+  33%{filter:brightness(1.15) hue-rotate(15deg)}
+  66%{filter:brightness(1.1) hue-rotate(-10deg)}
+  100%{filter:brightness(1) hue-rotate(0deg)}}
+.desc{font-family:var(--mono);font-size:12.5px;color:var(--muted);line-height:1.75;max-width:500px;margin:0 auto;}
+.start-section{display:flex;flex-direction:column;align-items:center;gap:12px;width:100%;animation:fadeUp .8s .12s cubic-bezier(.16,1,.3,1) both;}
+.btn-row{display:flex;align-items:center;gap:16px;flex-wrap:wrap;justify-content:center;}
+.start-btn{position:relative;font-family:var(--font);font-size:15px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#030712;
+  background:linear-gradient(135deg,#22d3ee,#a78bfa,#34d399,#22d3ee);background-size:300% 300%;
+  border:none;border-radius:14px;padding:15px 48px;cursor:pointer;
+  transition:transform .18s,box-shadow .18s;
+  box-shadow:0 0 32px rgba(34,211,238,.4),0 0 64px rgba(167,139,250,.2);
+  animation:auroraBtn 4s ease infinite;}
+@keyframes auroraBtn{0%{background-position:0% 50%}50%{background-position:100% 50%}100%{background-position:0% 50%}}
+.start-btn:hover{transform:translateY(-3px) scale(1.05);box-shadow:0 0 60px rgba(34,211,238,.6),0 0 100px rgba(167,139,250,.4);}
+.start-btn:active{transform:scale(.97);}
+.start-btn:disabled{opacity:.45;cursor:not-allowed;transform:none;animation:none;box-shadow:none;}
+.orb-ring{position:absolute;inset:-8px;border-radius:18px;pointer-events:none;
+  border:1.5px solid rgba(34,211,238,.45);
+  animation:orbPulse 2s ease-out infinite;}
+@keyframes orbPulse{0%{transform:scale(1);opacity:.8}70%{transform:scale(1.15);opacity:0}100%{transform:scale(1.15);opacity:0}}
+.status-pill{display:inline-flex;align-items:center;gap:8px;font-size:12px;font-family:var(--mono);color:var(--muted);background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:99px;padding:8px 16px;}
+.sdot{width:7px;height:7px;border-radius:50%;background:var(--muted);flex-shrink:0;transition:background .3s,box-shadow .3s;}
+.sdot.running{background:var(--success);box-shadow:0 0 10px rgba(52,211,153,.7);animation:blink 1.2s ease-in-out infinite;}
+.sdot.error{background:var(--danger);}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.2}}
+.spinner-s{width:14px;height:14px;border-radius:50%;border:2px solid rgba(34,211,238,.2);border-top-color:var(--accent);animation:spin .8s linear infinite;flex-shrink:0;}
+@keyframes spin{to{transform:rotate(360deg)}}
+.smsg{font-size:11px;font-family:var(--mono);color:var(--muted);text-align:center;min-height:16px;transition:color .3s;}
+.smsg.running{color:var(--success)}.smsg.error{color:var(--danger)}
+.ptrack{width:100%;max-width:460px;height:2px;background:rgba(34,211,238,.1);border-radius:99px;overflow:hidden;}
+.pbar{height:100%;border-radius:99px;background:linear-gradient(90deg,var(--accent),var(--accent2),var(--success));transition:width .5s ease;}
+.pbar.ind{width:38%!important;animation:ind 1.3s ease-in-out infinite;}
+@keyframes ind{0%{transform:translateX(-120%)}100%{transform:translateX(360%)}}
+.divider{width:100%;max-width:600px;height:1px;background:linear-gradient(90deg,transparent,rgba(34,211,238,.4),rgba(167,139,250,.4),rgba(52,211,153,.3),transparent);margin:36px 0;animation:fadeUp .8s .22s cubic-bezier(.16,1,.3,1) both;}
+.info-row{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;width:100%;margin-bottom:18px;animation:fadeUp .8s .28s cubic-bezier(.16,1,.3,1) both;}
+@media(max-width:600px){.info-row{grid-template-columns:1fr;}}
+.icard{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:16px 18px;text-align:center;backdrop-filter:blur(10px);transition:border-color .3s,transform .2s;}
+.icard:hover{border-color:rgba(34,211,238,.45);transform:translateY(-2px);}
+.icard .cat{font-family:var(--mono);font-size:9px;font-weight:500;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin-bottom:7px;}
+.icard .val{font-size:13px;font-weight:600;color:var(--text);line-height:1.35;}
+.lower{display:grid;grid-template-columns:1fr 1fr;gap:16px;width:100%;animation:fadeUp .8s .36s cubic-bezier(.16,1,.3,1) both;}
+@media(max-width:600px){.lower{grid-template-columns:1fr;}}
+.scard{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:20px 22px;backdrop-filter:blur(10px);}
+.scard h2{font-size:11px;font-weight:600;color:var(--accent);font-family:var(--mono);letter-spacing:.14em;margin-bottom:16px;text-transform:uppercase;}
+.feat{border-bottom:1px solid rgba(34,211,238,.07);padding:10px 0;}
+.feat:first-of-type{padding-top:0;}.feat:last-child{border-bottom:none;padding-bottom:0;}
+.feat h3{font-size:13px;font-weight:600;margin-bottom:3px;color:var(--text);}
+.feat p{font-size:11.5px;color:var(--muted);line-height:1.55;font-family:var(--mono);}
+.step{display:flex;align-items:flex-start;gap:12px;padding:9px 0;border-bottom:1px solid rgba(34,211,238,.07);}
+.step:last-child{border-bottom:none;}
+.snum{width:26px;height:26px;border-radius:8px;flex-shrink:0;background:rgba(34,211,238,.1);border:1px solid rgba(34,211,238,.25);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:var(--accent);font-family:var(--mono);}
+.step p{font-size:11.5px;color:var(--muted);line-height:1.55;padding-top:3px;font-family:var(--mono);}
+@keyframes fadeUp{from{opacity:0;transform:translateY(24px)}to{opacity:1;transform:translateY(0)}}
+</style>
+</head>
+<body>
+<div id="root">
+  <div class="hex-grid"></div>
+  <canvas id="ac"></canvas>
+  <div class="page">
+    <div class="title-section">
+      <div class="badge">// Accessibility-first desktop assistant</div>
+      <h1>Eye Click</h1>
+      <p class="desc">A local accessibility experience that helps people interact with a computer through head movement, blink actions, and voice guidance.</p>
+    </div>
+    <div class="start-section">
+      <div class="btn-row">
+        <div style="position:relative;display:inline-block;">
+          <div class="orb-ring" id="pring"></div>
+          <button class="start-btn" id="sbtn" onclick="handleStart()">&#9654;&nbsp; Start Project</button>
+        </div>
+        <div class="status-pill">
+          <div class="sdot" id="sdot"></div>
+          <span id="spill-txt">Ready</span>
+          <div class="spinner-s" id="spin-s" style="display:none;"></div>
+        </div>
+      </div>
+      <div class="smsg" id="smsg"></div>
+      <div class="ptrack"><div class="pbar" id="pbar" style="width:0%"></div></div>
+    </div>
+    <div class="divider"></div>
+    <div class="info-row">
+      <div class="icard"><div class="cat">Voice flow</div><div class="val">Wake word + safe actions</div></div>
+      <div class="icard"><div class="cat">Control style</div><div class="val">Head movement and blink support</div></div>
+      <div class="icard"><div class="cat">Project goal</div><div class="val">Practical hands-free computer access</div></div>
+    </div>
+    <div class="lower">
+      <div class="scard">
+        <h2>What it offers</h2>
+        <div class="feat"><h3>Hands-free control</h3><p>Move through your computer with head movement and blink actions designed for everyday accessibility support.</p></div>
+        <div class="feat"><h3>Voice guided</h3><p>Speak commands naturally after the wake word — the assistant handles the rest with safe, reversible actions.</p></div>
+        <div class="feat"><h3>Local and private</h3><p>Everything runs on your machine. No cloud, no data sent anywhere, no internet required during use.</p></div>
+      </div>
+      <div class="scard">
+        <h2>Getting started</h2>
+        <div class="step"><div class="snum">1</div><p>Connect your camera and microphone.</p></div>
+        <div class="step"><div class="snum">2</div><p>Start the assistant from this page.</p></div>
+        <div class="step"><div class="snum">3</div><p>Say the wake word, then speak your request naturally.</p></div>
+        <div class="step"><div class="snum">4</div><p>Use the on-screen window to monitor voice and control status.</p></div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+(function(){
+  const canvas=document.getElementById('ac'),ctx=canvas.getContext('2d');
+  let W,H,t=0;
+  const waves=[];
+  for(let i=0;i<7;i++) waves.push({
+    amp:50+Math.random()*70,
+    freq:0.002+Math.random()*0.004,
+    speed:0.006+Math.random()*0.008,
+    phase:Math.random()*Math.PI*2,
+    y:0.15+Math.random()*0.7,
+    hue:170+i*22,
+    alpha:0.05+Math.random()*0.08
+  });
+  const stars=[];
+  for(let i=0;i<150;i++) stars.push({x:Math.random(),y:Math.random(),r:Math.random()*1.3+.2,twinkle:Math.random()*Math.PI*2,speed:0.015+Math.random()*0.035});
+  function resize(){W=canvas.width=window.innerWidth;H=canvas.height=window.innerHeight;}
+  resize();window.addEventListener('resize',resize);
+  (function tick(){
+    ctx.clearRect(0,0,W,H);t+=0.016;
+    for(const s of stars){
+      s.twinkle+=s.speed;
+      const a=0.25+Math.sin(s.twinkle)*0.25;
+      ctx.beginPath();ctx.arc(s.x*W,s.y*H,s.r,0,Math.PI*2);
+      ctx.fillStyle='rgba(200,240,255,'+a+')';ctx.fill();
+    }
+    for(const w of waves){
+      ctx.beginPath();
+      const baseY=w.y*H;
+      ctx.moveTo(0,H);
+      for(let x=0;x<=W;x+=3){
+        const y=baseY
+          +Math.sin(x*w.freq+t*w.speed*60+w.phase)*w.amp
+          +Math.sin(x*w.freq*2.1+t*w.speed*35)*w.amp*0.35
+          +Math.sin(x*w.freq*0.5+t*w.speed*20)*w.amp*0.2;
+        ctx.lineTo(x,y);
+      }
+      ctx.lineTo(W,H);ctx.closePath();
+      const g=ctx.createLinearGradient(0,baseY-w.amp*1.5,0,baseY+w.amp);
+      g.addColorStop(0,'hsla('+w.hue+',85%,72%,'+(w.alpha*2)+')');
+      g.addColorStop(0.5,'hsla('+(w.hue+30)+',90%,65%,'+w.alpha+')');
+      g.addColorStop(1,'hsla('+(w.hue+60)+',80%,55%,0)');
+      ctx.fillStyle=g;ctx.fill();
+    }
+    requestAnimationFrame(tick);
+  })();
+})();
+function setUI(state,msg){
+  document.getElementById('sdot').className='sdot'+(state==='running'?' running':state==='error'?' error':'');
+  document.getElementById('spill-txt').textContent=state==='running'?'Running':state==='starting'?'Starting...':state==='error'?'Error':'Ready';
+  document.getElementById('spin-s').style.display=state==='starting'?'block':'none';
+  const sm=document.getElementById('smsg');sm.textContent=msg||'';sm.className='smsg'+(state==='running'?' running':state==='error'?' error':'');
+  const pb=document.getElementById('pbar');pb.className='pbar'+(state==='starting'?' ind':'');pb.style.width=state==='starting'?'38%':state==='running'?'100%':'0%';
+  const btn=document.getElementById('sbtn');btn.disabled=state==='starting'||state==='running';
+  btn.textContent=state==='running'?'● Running':'▶\u00A0 Start Project';
+  document.getElementById('pring').style.display=(state==='running'||state==='starting')?'none':'block';
+}
+async function handleStart(){
+  setUI('starting','Starting project...');
+  try{
+    const r=await fetch('/api/start',{method:'POST'});const d=await r.json();
+    if(d.running)setUI('running',d.message);else setUI('error',d.message||'Failed to start.');
+  }catch(_){setUI('error','Could not reach server.');}
+}
+window.addEventListener('load',()=>{
+  const poll=async()=>{try{const r=await fetch('/api/status');const d=await r.json();if(d.running)setUI('running',d.message);else if(!document.getElementById('sbtn').disabled)setUI('idle',d.message);}catch(_){}};
+  poll();setInterval(poll,3000);
+});
+</script>
+</body>
 </html>

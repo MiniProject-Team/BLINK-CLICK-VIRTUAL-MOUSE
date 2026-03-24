@@ -1,0 +1,27 @@
+04:51:39  speech_controller       INFO     AssistantVoice started (rate=165).
+04:51:39  speech_controller       INFO     [Assistant] Hello. I am ready. Say Ashu, then tell me what you want to do. I can help with safe desktop actions like typing, scrolling, clicks, copy and paste, opening apps, and opening websites.
+04:51:39  comtypes.client._code_cache  INFO     Imported existing <module 'comtypes.gen' from 'C:\\MINIPROJECT\\BLINK-CLICK-VIRTUAL-MOUSE\\.venv\\lib\\site-packages\\comtypes\\gen\\__init__.py'>
+04:51:39  comtypes.client._code_cache  INFO     Using writeable comtypes cache directory: 'C:\MINIPROJECT\BLINK-CLICK-VIRTUAL-MOUSE\.venv\lib\site-packages\comtypes\gen'
+04:51:41  mouse_controller        INFO     Camera capture started (index=0, backend=DSHOW)
+04:51:42  mouse_controller        INFO     MediaPipe FaceMesh initialised.
+04:51:42  main                    INFO     Blink tuning active (threshold=0.200 intentional=0.36s double_gap=0.55s cooldown=0.75s)
+04:51:42  main                    INFO     Ollama brain enabled (model=phi3)
+INFO: Created TensorFlow Lite XNNPACK delegate for CPU.
+04:51:42  speech_controller       INFO     Calibrating microphone...
+04:51:45  speech_controller       INFO     Microphone calibrated.
+04:51:45  speech_controller       INFO     Voice recognizer ready (device_index=1, device_name=Microphone Array (2- Realtek(R), energy_threshold=3.14, wake_phrase_limit=2.40s, command_phrase_limit=10.00s)
+04:51:45  main                    INFO     Voice controller active in hybrid mode with Ollama brain.
+04:51:55  speech_controller       ERROR    Google Speech API error during recognition: recognition connection failed: [Errno 11001] getaddrinfo failed
+04:52:01  speech_controller       ERROR    Google Speech API error during recognition: recognition connection failed: [Errno 11001] getaddrinfo failed
+04:52:17  speech_controller       ERROR    Google Speech API error during recognition: recognition connection failed: [Errno 11001] getaddrinfo failed
+04:52:23  speech_controller       ERROR    Google Speech API error during recognition: recognition connection failed: [Errno 11001] getaddrinfo failed
+04:52:29  speech_controller       ERROR    Google Speech API error during recognition: recognition connection failed: [Errno 11001] getaddrinfo failed
+04:52:49  speech_controller       INFO     Recognised speech: 'earphone lagaenge'
+04:52:54  mouse_controller        INFO     BlinkDetector emitted left click (cooldown=0.75s)
+04:52:54  speech_controller       INFO     [Assistant] Click
+04:52:54  main                    INFO     Stop button clicked. Exiting application.
+04:52:54  speech_controller       INFO     [Assistant] Stopping
+04:52:54  main                    INFO     Shutting down …
+04:52:54  speech_controller       INFO     VoiceController stopped.
+04:52:54  speech_controller       INFO     AssistantVoice stopped.
+04:52:55  mouse_controller        INFO     Camera released.

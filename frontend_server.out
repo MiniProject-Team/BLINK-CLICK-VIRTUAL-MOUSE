@@ -1,0 +1,24 @@
+[Assistant] Hello. I am ready. Say Ashu, then tell me what you want to do. I can help with safe desktop actions like typing, scrolling, clicks, copy and paste, opening apps, and opening websites.
+[Voice] Calibrating microphone...
+[Voice] Using microphone: Microphone Array (2- Realtek(R)
+[Voice] Microphone ready.
+[Voice] Wake word: 'ashu'
+
+══════════════════════════════════════════════════════════════
+   BLINK-CLICK VIRTUAL MOUSE  –  Accessibility Edition
+══════════════════════════════════════════════════════════════
+  TTS        : Active  (will speak back)
+  Voice In   : Active  (say 'ashu' to wake, rules + Ollama)
+  Brain      : Ollama phi3
+  Wake Word  : ashu
+  Cursor     : Head tracking (nose position)
+  Blink Click: EAR threshold 0.2
+  Click Cool : 0.75s
+  Press ESC to exit
+══════════════════════════════════════════════════════════════
+
+[Voice] Heard: 'earphone lagaenge'
+[Assistant] Click
+[Assistant] Stopping
+
+Program closed. Goodbye!
