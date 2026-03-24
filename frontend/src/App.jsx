@@ -127,11 +127,7 @@ export default function App() {
                 disabled={isLaunching}
                 type="button"
               >
-                <span className="start-glow" aria-hidden="true" />
-                <span className="start-label">
-                  {isLaunching ? "Starting..." : "Start Project"}
-                </span>
-                <span className="start-sub">Launch assistant</span>
+                {isLaunching ? "Starting..." : "Start Project"}
               </button>
               <div className="status-pill" data-running={launcherStatus.running}>
                 {launcherStatus.running ? "Running" : "Ready"}

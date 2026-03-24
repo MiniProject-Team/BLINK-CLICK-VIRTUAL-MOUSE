@@ -74,7 +74,7 @@ class MouseConfig:
     # (dwell-click removed)
 
     # Blink detection
-    blink_threshold: float = 0.20
+    blink_threshold: float = 0.17
     intentional_blink_duration: float = 0.36
     double_blink_gap: float = 0.55
     blink_release_margin: float = 0.02
