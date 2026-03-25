@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 speech_controller.py
 
@@ -19,6 +19,7 @@ import logging
 import os
 import queue
 import re
+import subprocess
 import threading
 import time
 import urllib.error
@@ -59,6 +60,8 @@ SUPPORTED_STEP_ACTIONS: tuple[str, ...] = (
     "hotkey",
     "open_url",
     "launch_app",
+    "system_search",
+    "close_app",
     "wait",
     "help",
     "stop",
@@ -379,6 +382,31 @@ def _resolve_app_target(app_name: str) -> Optional[str]:
     return None
 
 
+def _close_app_by_name(app_name: str) -> bool:
+    cleaned = app_name.strip().lower()
+    app_map = {
+        "notepad": "notepad.exe",
+        "chrome": "chrome.exe",
+        "edge": "msedge.exe",
+        "vlc": "vlc.exe",
+        "word": "winword.exe",
+        "winword": "winword.exe",
+        "excel": "excel.exe",
+    }
+
+    exe = app_map.get(cleaned)
+    if not exe:
+        return False
+
+    subprocess.run(
+        ["taskkill", "/f", "/im", exe],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return True
+
+
 def _scroll_amount_from_text(text: str) -> int:
     if any(word in text for word in ("little", "slightly", "bit")):
         return 250
@@ -528,22 +556,18 @@ def _plan_single_task_locally(cmd: str) -> Optional[dict[str, Any]]:
     if not text:
         return None
 
-    # UNIVERSAL CLOSE SYSTEM
-    if any(word in text for word in ["close", "exit", "quit"]):
-        if "close all tabs" in text:
-            return _default_plan(
-                decision="allow",
-                summary="Close all tabs",
-                reply="Closing all tabs",
-                steps=[
-                    {"action": "hotkey", "keys": ["ctrl", "w"]},
-                    {"action": "wait", "seconds": 0.5},
-                    {"action": "hotkey", "keys": ["ctrl", "w"]},
-                ],
-            )
+    # SMART CLOSE SYSTEM
+    if "close youtube" in text:
+        return _default_plan(
+            decision="allow",
+            summary="Close YouTube tab",
+            reply="Closing YouTube tab",
+            steps=[{"action": "hotkey", "keys": ["ctrl", "w"]}],
+        )
 
+    if "close" in text:
         # Close tab (browser)
-        if "tab" in text:
+        if "tab" in text or "youtube" in text:
             return _default_plan(
                 decision="allow",
                 summary="Close tab",
@@ -551,11 +575,21 @@ def _plan_single_task_locally(cmd: str) -> Optional[dict[str, Any]]:
                 steps=[{"action": "hotkey", "keys": ["ctrl", "w"]}],
             )
 
-        # Close window/app (general)
+        # Close specific app
+        for app in ["notepad", "chrome", "edge", "vlc", "word", "excel"]:
+            if app in text:
+                return _default_plan(
+                    decision="allow",
+                    summary=f"Close {app}",
+                    reply=f"Closing {app}",
+                    steps=[{"action": "close_app", "app": app}],
+                )
+
+        # Fallback close current window
         return _default_plan(
             decision="allow",
-            summary="Close application",
-            reply="Closing application",
+            summary="Close window",
+            reply="Closing current window",
             steps=[{"action": "hotkey", "keys": ["alt", "f4"]}],
         )
 
@@ -567,7 +601,10 @@ def _plan_single_task_locally(cmd: str) -> Optional[dict[str, Any]]:
             steps=[{"action": "help"}],
         )
 
-    if any(word in text for word in ("stop", "exit", "quit", "close app")):
+    if any(
+        phrase in text
+        for phrase in ("stop", "stop app", "stop assistant", "quit assistant", "exit assistant")
+    ):
         return _default_plan(
             decision="allow",
             summary="Stop app",
@@ -685,6 +722,54 @@ def _plan_single_task_locally(cmd: str) -> Optional[dict[str, Any]]:
                 steps=[{"action": "launch_app", "app": app_name}],
             )
 
+    if "word" in text:
+        return _default_plan(
+            decision="allow",
+            summary="Open Word",
+            reply="Opening Microsoft Word",
+            steps=[{"action": "launch_app", "app": "winword"}],
+        )
+
+    # PERFECT PLAY SYSTEM (FINAL)
+    if text.startswith("play "):
+        query = text.replace("play", "", 1).strip()
+
+        if query:
+            return _default_plan(
+                decision="allow",
+                summary="Play on YouTube",
+                reply=f"Playing {query}",
+                steps=[
+                    {
+                        "action": "open_url",
+                        "url": f"https://www.youtube.com/results?search_query={urllib.parse.quote_plus(query)}",
+                    },
+                    {"action": "wait", "seconds": 2},
+                    {"action": "press_key", "key": "tab"},
+                    {"action": "press_key", "key": "tab"},
+                    {"action": "press_key", "key": "enter"},
+                ],
+            )
+
+    if text.startswith("open youtube and play "):
+        query = text.replace("open youtube and play", "", 1).strip()
+        if query:
+            return _default_plan(
+                decision="allow",
+                summary="Play on YouTube",
+                reply=f"Playing {query}",
+                steps=[
+                    {
+                        "action": "open_url",
+                        "url": f"https://www.youtube.com/results?search_query={urllib.parse.quote_plus(query)}",
+                    },
+                    {"action": "wait", "seconds": 2},
+                    {"action": "press_key", "key": "tab"},
+                    {"action": "press_key", "key": "tab"},
+                    {"action": "press_key", "key": "enter"},
+                ],
+            )
+
     if "youtube" in text and "search" in text:
         query = _extract_text_after_command(text, ("search for ", "search "))
         if query:
@@ -744,6 +829,7 @@ def _plan_single_task_locally(cmd: str) -> Optional[dict[str, Any]]:
         )
 
     if text.startswith("open "):
+        app_name = text.replace("open", "", 1).strip()
         url = _coerce_safe_url(text[5:].strip())
         if url:
             return _default_plan(
@@ -751,6 +837,15 @@ def _plan_single_task_locally(cmd: str) -> Optional[dict[str, Any]]:
                 summary="Open website",
                 reply="Opening that website.",
                 steps=[{"action": "open_url", "url": url}],
+            )
+
+        # UNIVERSAL APP OPEN (WINDOWS SEARCH)
+        if app_name and len(app_name) > 2:
+            return _default_plan(
+                decision="allow",
+                summary=f"Open {app_name}",
+                reply=f"Opening {app_name}",
+                steps=[{"action": "system_search", "query": app_name}],
             )
 
     # FINAL FALLBACK (guaranteed execution)
@@ -879,7 +974,19 @@ def _normalize_step(step: Any) -> Optional[dict[str, Any]]:
             return None
         normalized["url"] = url
 
+    elif action == "system_search":
+        query = str(step.get("query", "")).strip()
+        if len(query) <= 2:
+            return None
+        normalized["query"] = query
+
     elif action == "launch_app":
+        app = str(step.get("app", "")).strip().lower()
+        if not app:
+            return None
+        normalized["app"] = app
+
+    elif action == "close_app":
         app = str(step.get("app", "")).strip().lower()
         if not app:
             return None
@@ -976,155 +1083,97 @@ class OllamaBrain:
 
     def _build_prompt(self, utterance: str, drag_mode: bool) -> str:
         return f"""
-You are the local planning brain for a Windows accessibility assistant.
-The user has already used the wake word, so this text is the real request.
+You are the brain of a Windows voice-controlled assistant.
 
-Return strict JSON only with this schema:
-{{
-  "decision": "allow" | "confirm" | "block" | "noop",
-  "summary": "short summary",
-  "reply": "short spoken reply",
-  "steps": [
-    {{"action": "left_click"}},
-    {{"action": "right_click"}},
-    {{"action": "double_click"}},
-    {{"action": "scroll", "direction": "up" | "down", "amount": 300}},
-    {{"action": "drag_toggle"}},
-    {{"action": "type_text", "text": "hello"}},
-    {{"action": "press_key", "key": "enter"}},
-    {{"action": "hotkey", "keys": ["ctrl", "l"]}},
-    {{"action": "open_url", "url": "https://example.com"}},
-    {{"action": "launch_app", "app": "notepad"}},
-    {{"action": "wait", "seconds": 1.0}},
-    {{"action": "help"}},
-    {{"action": "stop"}},
-    {{"action": "noop"}}
-  ]
-}}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🎯 CORE GOAL
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Convert user voice commands into safe desktop actions.
 
-Rules:
-- Only use the listed actions.
-- Prefer open_url for websites and search requests.
-- Prefer Google or YouTube search URLs for web searches.
-- Understand natural spoken phrasing and ignore filler words like please,
-  can you, help me, or for me when the intent is clear.
-- If the user asks for a multi-step task, return multiple steps in order.
-- If typing or hotkeys should happen after opening an app or page, include a
-  short wait step first.
-- Do not open a browser homepage and then open a URL for the same task; prefer
-  one direct open_url step when that is enough.
-- launch_app is only for common safe Windows apps like chrome, edge, notepad,
-  calculator, paint, explorer, settings, camera, or photos.
-- If the user requests destructive, secretive, shell, terminal, registry,
-  credential, malware, bypass, or security-disabling behavior, return decision
-  "block" with no steps.
-- If the request is sensitive or could close apps or change state in a risky way,
-  you may return "confirm".
-- If you are unsure, return "noop".
-- Keep steps short, practical, and at most {MAX_PLAN_STEPS}.
-- Current drag mode is {"on" if drag_mode else "off"}.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+💻 APPLICATION CONTROL (IMPORTANT)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+- The assistant can open ANY application installed on the system.
+- Do NOT restrict to predefined apps.
+- Use "launch_app" for all applications.
 
 Examples:
-Request: open youtube and search lofi music
-JSON:
+- "open word" -> app = "winword"
+- "open excel" -> app = "excel"
+- "open chrome" -> app = "chrome"
+- "open vlc" -> app = "vlc"
+- "open photoshop" -> app = "photoshop"
+
+If unsure:
+-> use the spoken name directly (e.g., "spotify", "telegram")
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🚫 BLOCKED ACTIONS (VERY IMPORTANT)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+DO NOT allow:
+- command prompt
+- powershell
+- terminal
+- registry (regedit)
+- hacking / bypass / malware
+- deleting system files
+- disabling security
+
+If detected:
+-> decision = "block"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🎵 PLAY COMMAND (CRITICAL)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+If user says:
+- "play <song>"
+- "play <anything>"
+
+-> ALWAYS return:
+open_url with YouTube search
+
+Example:
+"play tum hi ho"
+-> https://www.youtube.com/results?search_query=tum+hi+ho
+
+DO NOT:
+- type text
+- open google
+- launch browser manually
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚡ EXECUTION RULES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+- Prefer DIRECT actions (open_url, launch_app)
+- NEVER use type_text for search
+- NEVER mix launch_app + type_text for search
+- Keep steps minimal (1-3 steps max)
+- No unnecessary steps
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📦 OUTPUT FORMAT (STRICT JSON ONLY)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 {{
-  "decision": "allow",
-  "summary": "Open YouTube search",
-  "reply": "Opening YouTube search.",
-  "steps": [
-    {{
-      "action": "open_url",
-      "url": "https://www.youtube.com/results?search_query=lofi+music"
-    }}
-  ]
+    "decision": "allow" | "confirm" | "block" | "noop",
+    "summary": "short summary",
+    "reply": "short reply",
+    "steps": [
+        {{ "action": "open_url", "url": "..." }},
+        {{ "action": "launch_app", "app": "..." }},
+        {{ "action": "press_key", "key": "enter" }},
+        {{ "action": "hotkey", "keys": ["ctrl", "c"] }}
+    ]
 }}
 
-Request: type hello my name is ayush
-JSON:
-{{
-  "decision": "allow",
-  "summary": "Type dictated text",
-  "reply": "Typing your text.",
-  "steps": [
-    {{"action": "type_text", "text": "hello my name is ayush"}}
-  ]
-}}
-
-Request: copy and paste
-JSON:
-{{
-  "decision": "allow",
-  "summary": "Copy and paste",
-  "reply": "Working on it.",
-  "steps": [
-    {{"action": "hotkey", "keys": ["ctrl", "c"]}},
-    {{"action": "hotkey", "keys": ["ctrl", "v"]}}
-  ]
-}}
-
-Request: open chrome
-JSON:
-{{
-  "decision": "allow",
-  "summary": "Open chrome",
-  "reply": "Opening chrome.",
-  "steps": [
-    {{"action": "launch_app", "app": "chrome"}}
-  ]
-}}
-
-Request: could you please open youtube and search coding music for me
-JSON:
-{{
-  "decision": "allow",
-  "summary": "Open YouTube search",
-  "reply": "Opening YouTube search.",
-  "steps": [
-    {{
-      "action": "open_url",
-      "url": "https://www.youtube.com/results?search_query=coding+music"
-    }}
-  ]
-}}
-
-Request: open notepad and type hello world
-JSON:
-{{
-  "decision": "allow",
-  "summary": "Open notepad and type text",
-  "reply": "Working on it.",
-  "steps": [
-    {{"action": "launch_app", "app": "notepad"}},
-    {{"action": "wait", "seconds": 0.8}},
-    {{"action": "type_text", "text": "hello world"}}
-  ]
-}}
-
-Request: search accessibility tips on youtube
-JSON:
-{{
-  "decision": "allow",
-  "summary": "Open YouTube search",
-  "reply": "Searching YouTube for accessibility tips.",
-  "steps": [
-    {{
-      "action": "open_url",
-      "url": "https://www.youtube.com/results?search_query=accessibility+tips"
-    }}
-  ]
-}}
-
-Request: open command prompt and run ipconfig
-JSON:
-{{
-  "decision": "block",
-  "summary": "Blocked risky request",
-  "reply": "I cannot help with terminal or security-sensitive actions.",
-  "steps": []
-}}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 User request: {utterance}
-""".strip()
+"""
 
     def plan(self, utterance: str, drag_mode: bool = False) -> Optional[dict[str, Any]]:
         self.last_error = ""
@@ -2059,16 +2108,20 @@ class VoiceCommandProcessor:
             action = step["action"]
             if action == "open_url" and not _is_safe_http_url(step.get("url", "")):
                 return "block", "I can only open normal http or https websites."
+            if action == "system_search":
+                query = step.get("query", "").lower().strip()
+                if not query or len(query) <= 2:
+                    return "noop", "Please say a more specific app name."
+                if any(term in query for term in BLOCKED_APP_TERMS):
+                    return "block", "I cannot open system-level tools."
             if action == "launch_app":
-                app_name = step.get("app", "")
+                app_name = step.get("app", "").lower()
                 if any(term in app_name for term in BLOCKED_APP_TERMS):
-                    return "block", "I cannot open terminal or registry tools by voice."
-                if _resolve_app_target(app_name) is None:
-                    return (
-                        "block",
-                        "I can only open a few safe apps like Chrome, Edge, Notepad, "
-                        "Calculator, Paint, Explorer, Settings, Camera, or Photos.",
-                    )
+                    return "block", "I cannot open system-level tools."
+            if action == "close_app":
+                app_name = step.get("app", "").lower()
+                if any(term in app_name for term in BLOCKED_APP_TERMS):
+                    return "block", "I cannot close system-level tools."
             if action == "hotkey":
                 keys = tuple(sorted(step.get("keys", [])))
                 if any(key in BLOCKED_HOTKEY_KEYS for key in keys):
@@ -2135,10 +2188,29 @@ class VoiceCommandProcessor:
                 elif action == "open_url":
                     webbrowser.open(step.get("url", ""))
 
+                elif action == "system_search":
+                    query = step.get("query", "")
+                    pyautogui.press("win")
+                    time.sleep(0.7)
+                    pyautogui.typewrite(query, interval=0.05)
+                    time.sleep(1.0)
+                    pyautogui.press("enter")
+
                 elif action == "launch_app":
-                    target = _resolve_app_target(step.get("app", ""))
+                    app_name = step.get("app", "")
+                    target = _resolve_app_target(app_name)
                     if target:
                         os.startfile(target)
+                    else:
+                        try:
+                            subprocess.Popen(f'start "" "{app_name}"', shell=True)
+                        except Exception:
+                            print(f"Failed to open {app_name}")
+
+                elif action == "close_app":
+                    app_name = step.get("app", "")
+                    if not _close_app_by_name(app_name):
+                        print(f"Failed to close {app_name}")
 
                 elif action == "wait":
                     time.sleep(float(step.get("seconds", 1.0)))
@@ -2304,3 +2376,4 @@ class VoiceCommandProcessor:
         self._stopped = True
         self._work_q.put_nowait(None)
         self._thread.join(timeout=1.5)
+
