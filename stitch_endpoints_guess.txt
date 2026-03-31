@@ -1,0 +1,15 @@
+https://angular.dev/license
+*/
+/*
+ @license
+ Copyright Google LLC All Rights Reserved.
+
+ Use of this source code is governed by an MIT-style license that can be
+ found in the LICENSE file at https://angular.dev/license
+*/
+/*
+
+
+ Copyright (c) 2015-2018 Google, Inc., Netflix, Inc., Microsoft Corp. and contributors
+ Licensed under the Apache License, Version 2.0 (the 
+/x-www-form-urlencoded

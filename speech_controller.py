@@ -86,6 +86,8 @@ LOCAL_STEP_WAIT_SECONDS = 0.8
 DEFAULT_VOICE_COMMAND_STALE_S = 4.0
 DEFAULT_VOICE_DUPLICATE_WINDOW_S = 1.4
 DEFAULT_VOICE_MAX_PENDING_COMMANDS = 2
+DEFAULT_MIC_LISTEN_WINDOW_S = 10.0
+DEFAULT_MIC_CYCLE_PAUSE_S = 0.8
 
 VOICE_TEXT_REPLACEMENTS: tuple[tuple[str, str], ...] = (
     ("you tube", "youtube"),
@@ -256,6 +258,48 @@ NO_MATCH_REPLY = (
 )
 QUESTION_THINKING_REPLY = "Let me think."
 QUESTION_UNAVAILABLE_REPLY = "I could not get an answer right now. Please try again."
+CHAT_PREFIXES: tuple[str, ...] = (
+    "chat",
+    "chatbot",
+    "assistant",
+    "ask",
+    "question",
+)
+
+PROJECT_FAQ: tuple[tuple[tuple[str, ...], str], ...] = (
+    (
+        ("what is", "about", "project", "blink click", "virtual mouse"),
+        "Blink-Click Virtual Mouse is a hands-free accessibility system that uses face tracking, blink clicks, and voice commands to control the computer.",
+    ),
+    (
+        ("how it works", "how does", "working"),
+        "The webcam tracks facial landmarks, maps head movement to cursor motion, and uses eye blinks for clicks while voice commands handle actions like open, type, and scroll.",
+    ),
+    (
+        ("features", "capabilities", "what can you do"),
+        "It supports head-tracked cursor control, blink-based clicking, voice commands with a wake word, and optional local AI planning through Ollama.",
+    ),
+    (
+        ("voice", "wake word", "ashu"),
+        "Say the wake word 'Ashu' before a command. You can change it with the WAKE_WORD environment variable.",
+    ),
+    (
+        ("run", "start", "launch", "how to run"),
+        "Run python main.py to start the system. Use python frontend_server.py for the launcher page.",
+    ),
+    (
+        ("exit", "quit", "stop"),
+        "Press ESC twice within about 1.5 seconds or say 'Ashu stop' to exit.",
+    ),
+    (
+        ("camera", "webcam", "not opening"),
+        "If the camera is not opening, close other apps using the webcam and try CAMERA_INDEX=1 before running.",
+    ),
+    (
+        ("requirements", "prerequisites"),
+        "You need Python 3.10+, a webcam, a microphone, and internet for speech recognition. Ollama is optional for natural language planning.",
+    ),
+)
 
 
 def _extract_json_object(text: str) -> Optional[dict[str, Any]]:
@@ -355,6 +399,12 @@ def _parse_phrase_list(value: Optional[str]) -> set[str]:
         if cleaned:
             phrases.add(cleaned)
     return phrases
+
+
+def _parse_bool_env(value: Optional[str], default: bool) -> bool:
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _extract_transcript_candidates(result: Any) -> list[str]:
@@ -1232,6 +1282,7 @@ User request: {utterance}
 
     def answer_question(self, utterance: str) -> Optional[str]:
         """Return a short spoken answer for general user questions."""
+        self.last_error = ""
         prompt = f"""
 You are a helpful voice assistant for accessibility software.
 Answer the user question in plain English, short and clear.
@@ -1260,22 +1311,38 @@ User question: {utterance}
                 body = resp.read().decode("utf-8", errors="ignore")
         except urllib.error.URLError as exc:
             logger.warning("Ollama Q&A not reachable: %s", exc)
+            self.last_error = (
+                "The local brain is not reachable. Start Ollama first with "
+                "ollama serve and keep the model available."
+            )
             return None
         except Exception as exc:
             logger.warning("Ollama Q&A failed: %s", exc)
+            if "timed out" in str(exc).lower():
+                self.last_error = (
+                    "The local brain took too long to answer. Start Ollama first "
+                    "or increase OLLAMA_TIMEOUT."
+                )
+            else:
+                self.last_error = "The local brain could not answer that right now."
             return None
 
         wrapper = _extract_json_object(body)
         if not wrapper:
+            self.last_error = "The local brain returned an unreadable response."
             return None
 
         response_text = wrapper.get("response", "")
         if not isinstance(response_text, str):
+            self.last_error = "The local brain returned an invalid answer."
             return None
 
         cleaned = response_text.strip().replace("\n", " ")
         cleaned = re.sub(r"\s+", " ", cleaned)
-        return cleaned[:320] if cleaned else None
+        if not cleaned:
+            self.last_error = "The local brain returned an empty answer."
+            return None
+        return cleaned[:320]
 
 
 def _looks_like_question(text: str) -> bool:
@@ -1308,6 +1375,49 @@ def _looks_like_question(text: str) -> bool:
         "explain ",
     )
     return cleaned.startswith(question_prefixes)
+
+
+def _strip_chat_prefix(text: str) -> str:
+    cleaned = _clean_voice_text(text)
+    if not cleaned:
+        return ""
+
+    for prefix in CHAT_PREFIXES:
+        if cleaned == prefix:
+            return ""
+        if cleaned.startswith(f"{prefix} "):
+            return cleaned[len(prefix) :].strip()
+    return cleaned
+
+
+def _should_route_to_chat(text: str) -> bool:
+    cleaned = _clean_voice_text(text)
+    if not cleaned:
+        return False
+    if _looks_like_question(cleaned):
+        return True
+    if "chat bot" in cleaned or "chatbot" in cleaned:
+        return True
+    return any(cleaned.startswith(prefix) for prefix in CHAT_PREFIXES)
+
+
+def _answer_project_faq(text: str) -> Optional[str]:
+    cleaned = _clean_voice_text(text)
+    if not cleaned:
+        return None
+
+    for keywords, answer in PROJECT_FAQ:
+        if any(keyword in cleaned for keyword in keywords):
+            return answer
+
+    if "blink" in cleaned and "click" in cleaned:
+        return "Blink clicks use the eye aspect ratio to detect intentional blinks and translate them into left or right clicks."
+    if "head" in cleaned or "cursor" in cleaned:
+        return "Head movement is mapped to the screen using the nose tip landmark and smoothed to reduce jitter."
+    if "voice command" in cleaned or "command" in cleaned:
+        return "Voice commands start with the wake word, then you can say open, type, scroll, press keys, or ask a question."
+
+    return None
 
 
 def plan_task(
@@ -1486,7 +1596,8 @@ class VoiceController:
 
     HELP_TEXT = (
         "Say Ashu, then speak naturally. For example: open YouTube and search "
-        "lofi music, open chrome, type hello, press enter, copy, paste, or stop."
+        "lofi music, open chrome, type hello, press enter, copy, paste, or stop. "
+        "For chat, say Ashu ask <your question>."
     )
 
     def __init__(
@@ -1514,6 +1625,7 @@ class VoiceController:
         self.mic_name: Optional[str] = None
         self.debug_raw = debug_raw_recognition
         self.wake_word = _clean_voice_text(wake_word) or DEFAULT_WAKE_WORD
+        self.language = os.environ.get("VOICE_LANGUAGE", "en-IN").strip() or "en-IN"
         self.command_window_s = max(2.0, float(command_window_s))
         self.acknowledge_wake = acknowledge_wake
         self.wake_word_aliases = {"ashoo", "ashuu"} if self.wake_word == "ashu" else set()
@@ -1563,6 +1675,26 @@ class VoiceController:
             minimum=2.0,
             maximum=20.0,
         )
+        self.mic_listen_window_s = _clamp_float(
+            os.environ.get("VOICE_MIC_LISTEN_WINDOW_S", DEFAULT_MIC_LISTEN_WINDOW_S),
+            default=DEFAULT_MIC_LISTEN_WINDOW_S,
+            minimum=3.0,
+            maximum=60.0,
+        )
+        self.mic_cycle_pause_s = _clamp_float(
+            os.environ.get("VOICE_MIC_CYCLE_PAUSE_S", DEFAULT_MIC_CYCLE_PAUSE_S),
+            default=DEFAULT_MIC_CYCLE_PAUSE_S,
+            minimum=0.1,
+            maximum=10.0,
+        )
+        self.auto_mic_cycle = _parse_bool_env(
+            os.environ.get("VOICE_MIC_AUTO_CYCLE"),
+            True,
+        )
+        self.mic_enabled = _parse_bool_env(
+            os.environ.get("VOICE_MIC_ENABLED"),
+            True,
+        )
 
         available_names = list_microphone_names()
         if self.mic_index is None:
@@ -1592,6 +1724,12 @@ class VoiceController:
         self._last_wake_time: float = 0.0
         self._last_feedback_time: float = 0.0
         self._awaiting_feedback_sent = False
+        self._state_lock = threading.Lock()
+        self._mic_cycle_pause_until: float = 0.0
+        self._mic_cycle_deadline: float = 0.0
+
+        if self.mic_enabled and self.auto_mic_cycle:
+            self._mic_cycle_deadline = time.time() + self.mic_listen_window_s
 
         self.recognizer.energy_threshold = energy_threshold
         self.recognizer.dynamic_energy_threshold = True
@@ -1612,15 +1750,17 @@ class VoiceController:
                 )
             logger.info("Microphone calibrated.")
             logger.info(
-                "Voice recognizer ready (device_index=%s, device_name=%s, energy_threshold=%.2f, wake_phrase_limit=%.2fs, command_phrase_limit=%.2fs)",
+                "Voice recognizer ready (device_index=%s, device_name=%s, language=%s, energy_threshold=%.2f, wake_phrase_limit=%.2fs, command_phrase_limit=%.2fs)",
                 self.mic_index,
                 self.mic_name or "default",
+                self.language,
                 self.recognizer.energy_threshold,
                 self.wake_phrase_limit_s,
                 self.command_phrase_limit_s,
             )
             print("[Voice] Microphone ready.")
             print(f"[Voice] Wake word: '{self.wake_word}'")
+            print(f"[Voice] Language: '{self.language}'")
         except Exception as exc:
             self.last_error = str(exc)
             logger.error("Microphone calibration failed: %s", exc)
@@ -1628,6 +1768,31 @@ class VoiceController:
 
         self._thread = threading.Thread(target=self._listen_loop, daemon=True)
         self._thread.start()
+
+    def _reset_mic_cycle_locked(self, now: Optional[float] = None) -> None:
+        current_time = time.time() if now is None else now
+        self._mic_cycle_pause_until = 0.0
+        self._mic_cycle_deadline = current_time + self.mic_listen_window_s
+
+    def set_mic_enabled(self, enabled: bool) -> None:
+        with self._state_lock:
+            self.mic_enabled = bool(enabled)
+            if self.mic_enabled and self.auto_mic_cycle:
+                self._reset_mic_cycle_locked()
+            else:
+                self._mic_cycle_pause_until = 0.0
+                self._mic_cycle_deadline = 0.0
+                self.awaiting_command_until = 0.0
+                self.last_matched = ""
+
+    def set_auto_mic_cycle(self, enabled: bool) -> None:
+        with self._state_lock:
+            self.auto_mic_cycle = bool(enabled)
+            if self.auto_mic_cycle and self.mic_enabled:
+                self._reset_mic_cycle_locked()
+            else:
+                self._mic_cycle_pause_until = 0.0
+                self._mic_cycle_deadline = 0.0
 
     def _token_matches_wake_word(self, token: str, allow_fuzzy: bool = True) -> bool:
         candidate = _clean_voice_text(token)
@@ -1750,6 +1915,42 @@ class VoiceController:
     def _listen_loop(self) -> None:
         while not self.stopped:
             try:
+                now = time.time()
+                with self._state_lock:
+                    mic_enabled = self.mic_enabled
+                    auto_mic_cycle = self.auto_mic_cycle
+                    cycle_deadline = self._mic_cycle_deadline
+                    cycle_pause_until = self._mic_cycle_pause_until
+
+                    if not mic_enabled:
+                        self.listening = False
+                        self.awaiting_command_until = 0.0
+                        self.last_matched = ""
+
+                    elif auto_mic_cycle:
+                        if cycle_deadline <= 0.0:
+                            self._reset_mic_cycle_locked(now)
+                            cycle_deadline = self._mic_cycle_deadline
+
+                        if now >= cycle_deadline:
+                            self.listening = False
+                            self.awaiting_command_until = 0.0
+                            self.last_matched = ""
+                            if cycle_pause_until <= 0.0:
+                                self._mic_cycle_pause_until = now + self.mic_cycle_pause_s
+                                cycle_pause_until = self._mic_cycle_pause_until
+
+                            if now >= cycle_pause_until:
+                                self._reset_mic_cycle_locked(now)
+
+                if not mic_enabled:
+                    time.sleep(0.1)
+                    continue
+
+                if auto_mic_cycle and cycle_pause_until > 0.0 and now < cycle_pause_until:
+                    time.sleep(min(0.1, max(0.01, cycle_pause_until - now)))
+                    continue
+
                 self._expire_command_window()
                 self.listening = True
                 phrase_time_limit = (
@@ -1768,7 +1969,7 @@ class VoiceController:
                 try:
                     recognition = self.recognizer.recognize_google(
                         audio,
-                        language="en-US",
+                        language=self.language,
                         show_all=True,
                     )
                     transcripts = _extract_transcript_candidates(recognition)
@@ -1777,7 +1978,7 @@ class VoiceController:
                     else:
                         raw_text = self.recognizer.recognize_google(
                             audio,
-                            language="en-US",
+                            language=self.language,
                         )
                     self.last_error = ""
                 except sr.UnknownValueError:
@@ -1834,12 +2035,27 @@ class VoiceController:
         self._expire_command_window()
         if self.last_error:
             return self.last_error
+        if not self.mic_enabled:
+            return "Mic: off"
+        if self.auto_mic_cycle:
+            return f"Mic: auto {self.mic_listen_window_s:.0f}s"
         if time.time() < self.awaiting_command_until:
             return f"Wake: waiting ({self.wake_word})"
         return f"Wake: say {self.wake_word}"
 
     def stop(self) -> None:
+        if self.stopped:
+            return
         self.stopped = True
+        try:
+            self._thread.join(timeout=1.5)
+        except Exception:
+            pass
+        while True:
+            try:
+                self._cmd_q.get_nowait()
+            except queue.Empty:
+                break
         logger.info("VoiceController stopped.")
 
 
@@ -2289,19 +2505,33 @@ class VoiceCommandProcessor:
             return False
 
         if decision == "noop":
-            if self.brain and (_looks_like_question(text) or not plan.get("steps")):
+            if _should_route_to_chat(text):
                 self.last_status = "Answering"
                 self._speak(self._question_thinking_reply())
-                answer = self.brain.answer_question(text)
+                question_text = _strip_chat_prefix(text) or text
+
+                answer = None
+                if self.brain:
+                    answer = self.brain.answer_question(question_text)
+
+                if not answer:
+                    answer = _answer_project_faq(question_text)
+
                 if answer:
                     self.last_status = "Answered"
-                    logger.info("Answered via local brain: '%s'", text)
+                    logger.info("Answered via project chat: '%s'", question_text)
                     self._speak(answer)
                     return False
 
                 self.last_status = "Answer failed"
-                logger.info("Local brain did not return an answer for: '%s'", text)
-                self._speak(QUESTION_UNAVAILABLE_REPLY)
+                logger.info("Chat assistant did not return an answer for: '%s'", question_text)
+                if self.brain and self.brain.last_error:
+                    self._speak(self.brain.last_error)
+                else:
+                    self._speak(
+                        "I can answer questions about Blink-Click Virtual Mouse. "
+                        "For broader questions, start Ollama with ollama serve."
+                    )
                 return False
 
             self.last_status = "No match"

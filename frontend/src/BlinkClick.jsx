@@ -1,77 +1,132 @@
 import { startTransition, useEffect, useRef, useState } from "react";
-import BlurText from "./BlurText";
 import "./blink-click.css";
+import img1 from "./assets/img1.png";
+import img2 from "./assets/img2.png";
+import img3 from "./assets/img3.png";
 
-const highlights = [
-  { cat: "Voice flow", val: "Wake word + safe actions" },
-  { cat: "Control style", val: "Head movement and blink support" },
-  { cat: "Project goal", val: "Practical hands-free computer access" },
+const projectWorkflow = [
+  {
+    icon: "👁️",
+    title: "1. Real-Time Video Capture",
+    text: "The system starts by activating the webcam, which continuously captures live video of the user's face. This video is processed frame by frame using computer vision techniques.",
+  },
+  {
+    icon: "🧠",
+    title: "2. Face Detection & Landmark Extraction",
+    text: "The system uses MediaPipe Face Mesh to detect the face and identify 468 facial landmark points. These landmarks help locate important regions such as the eyes, nose, and mouth with high accuracy.",
+  },
+  {
+    icon: "🎯",
+    title: "3. Eye Tracking & Cursor Movement",
+    text: "The coordinates of the eyes (or nose tracking point) are mapped to screen coordinates. Moving eyes left/right/up/down moves the cursor accordingly, and smooth tracking keeps movement stable.",
+    points: [
+      "Moving eyes left/right/up/down moves cursor accordingly",
+      "Smooth tracking ensures stable cursor movement",
+      "Enables complete cursor control without touching any device",
+    ],
+  },
+  {
+    icon: "👁️‍🗨️",
+    title: "4. Blink Detection (Click Action)",
+    text: "The system calculates the Eye Aspect Ratio (EAR) to detect blinking. When eyes are open, EAR remains stable. When eyes close, EAR decreases.",
+    points: [
+      "Short blink: Left click",
+      "Long blink: Right click (optional)",
+      "Mouse click actions are performed using only eye gestures",
+    ],
+  },
+  {
+    icon: "🎤",
+    title: "5. Voice Command Control",
+    text: "The system also supports voice interaction. The microphone captures speech, speech is converted into text, and commands are matched and executed.",
+    points: ["Start system", "Stop system", "Open browser"],
+  },
+  {
+    icon: "⚡",
+    title: "6. Real-Time Processing",
+    text: "All operations happen in real time with continuous frame capture, instant eye tracking, fast blink detection, and immediate cursor response. This ensures a smooth and interactive experience.",
+  },
+  {
+    icon: "🖥️",
+    title: "7. Final Output",
+    text: "The system converts user actions into cursor movement, mouse clicks, and voice command execution.",
+  },
 ];
 
-const offerings = [
+const toolsUsed = [
   {
-    title: "Hands-free control",
-    text: "Move through your computer with head movement and blink actions designed for everyday accessibility support.",
+    name: "OpenCV",
+    image: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/opencv/opencv-original.svg",
+    description: "Real-time webcam capture and frame processing for the visual control pipeline.",
   },
   {
-    title: "Voice guided",
-    text: "Speak commands naturally after the wake word. The assistant handles the rest with safe, reversible actions.",
+    name: "Python",
+    image: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/python/python-original.svg",
+    description: "Core language used to wire cursor control, blink logic, and voice integration.",
   },
   {
-    title: "Local and private",
-    text: "Everything runs on your machine. No cloud services and no internet required during use.",
+    name: "Ollama Brain",
+    image: "https://cdn.simpleicons.org/ollama/ffffff",
+    description: "Local LLM planner that interprets natural voice intent into safe desktop actions.",
   },
 ];
 
-const steps = [
-  "Connect your camera and microphone.",
-  "Start the assistant from this page.",
-  "Say the wake word, then speak your request naturally.",
-  "Use the on-screen window to monitor voice and control status.",
+const engineModules = ["Head Tracking", "Blink Click", "Voice Commands", "Ollama Brain"];
+
+const controlSlides = [
+  {
+    title: "Image 1",
+    image: img1,
+  },
+  {
+    title: "Image 2",
+    image: img2,
+  },
+  {
+    title: "Image 3",
+    image: img3,
+  },
 ];
 
-const overviewBlocks = [
+const calibrationStats = [
   {
-    title: "Why this project matters",
-    text: "Traditional mouse and keyboard interaction requires physical movement, which can be difficult for users with mobility limitations. This project provides a contactless alternative focused on accessibility, inclusion, and everyday usability.",
+    label: "Face Mesh",
+    value: "468 landmarks",
+    note: "MediaPipe mesh points",
   },
   {
-    title: "Voice recognition module",
-    text: "A microphone captures speech, then SpeechRecognition converts audio into text. The recognized text is matched with predefined commands to trigger actions such as start, stop, and additional system controls.",
+    label: "Eye Aspect Ratio",
+    value: "0.18 threshold",
+    note: "Blink detect baseline",
   },
   {
-    title: "Computer vision pipeline",
-    text: "After activation, a webcam captures real-time video. OpenCV processes frames, detects the face region, and prepares a stable input stream for facial analysis.",
+    label: "Gaze Smoothing",
+    value: "0.85",
+    note: "Cursor stabilization",
   },
   {
-    title: "Facial landmark detection",
-    text: "MediaPipe identifies 468 facial landmarks in each frame. Eye-related landmark points are extracted to measure gaze position and movement with better precision.",
-  },
-  {
-    title: "Cursor movement by eye tracking",
-    text: "Eye landmark coordinates are continuously mapped from camera space to screen space. As the user moves their eyes, the cursor follows in real time to create intuitive, hands-free pointer control.",
-  },
-  {
-    title: "Blink-to-click logic (EAR)",
-    text: "The Eye Aspect Ratio (EAR) is computed from selected eye points. A sustained drop below a threshold indicates an intentional blink, and the system triggers a click event through PyAutoGUI while reducing false detections.",
-  },
-  {
-    title: "Multimodal interaction",
-    text: "The system combines eye movement for cursor navigation, blinking for click actions, and voice commands for higher-level tasks. This combination gives users flexible control paths based on comfort and context.",
-  },
-  {
-    title: "Real-time and practical deployment",
-    text: "Continuous frame processing and speech analysis provide quick feedback. Built with Python and common open-source libraries, the solution remains cost-effective, deployable, and suitable for assistive-tech and smart-interface scenarios.",
-  },
-  {
-    title: "Primary use cases",
-    text: "Key applications include assistive technology for users with mobility limitations, healthcare and rehabilitation environments, and smart interfaces where touch-free interaction is preferred for convenience or hygiene.",
-  },
-  {
-    title: "Technology stack",
-    text: "The implementation combines Python with OpenCV for image processing, MediaPipe for facial landmarks, SpeechRecognition for voice input, and PyAutoGUI for cursor and click control.",
+    label: "Lighting",
+    value: "Balanced",
+    note: "Low glare detected",
   },
 ];
+
+const faceChecklist = [
+  "Face centered inside frame grid",
+  "Eyes fully visible (no shadows)",
+  "Maintain 45-65 cm distance",
+  "Keep head level for accurate gaze",
+];
+
+const voiceDefaults = [
+  "Wake word: Ashu",
+  "Auto-confirm system actions",
+  "Noise suppression: medium",
+  "Language: English (India)",
+];
+
+const MIC_LISTEN_WINDOW_MS = 10000;
+const MIC_AUTO_RESTART_DELAY_MS = 900;
 
 function readJsonSafe(response) {
   return response.json().catch(() => ({}));
@@ -79,102 +134,41 @@ function readJsonSafe(response) {
 
 export default function BlinkClick() {
   const [isStarting, setIsStarting] = useState(false);
+  const [activeSlide, setActiveSlide] = useState(0);
+  const videoRef = useRef(null);
   const [status, setStatus] = useState({
     state: "idle",
     message: "",
     running: false,
   });
-  const canvasRef = useRef(null);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) {
-      return undefined;
-    }
-
-    const ctx = canvas.getContext("2d");
-    if (!ctx) {
-      return undefined;
-    }
-
-    let width = 0;
-    let height = 0;
-    let time = 0;
-    let frameId = 0;
-
-    const waves = Array.from({ length: 7 }, (_, i) => ({
-      amp: 50 + Math.random() * 70,
-      freq: 0.002 + Math.random() * 0.004,
-      speed: 0.006 + Math.random() * 0.008,
-      phase: Math.random() * Math.PI * 2,
-      y: 0.15 + Math.random() * 0.7,
-      hue: 170 + i * 22,
-      alpha: 0.05 + Math.random() * 0.08,
-    }));
-
-    const stars = Array.from({ length: 150 }, () => ({
-      x: Math.random(),
-      y: Math.random(),
-      r: Math.random() * 1.3 + 0.2,
-      twinkle: Math.random() * Math.PI * 2,
-      speed: 0.015 + Math.random() * 0.035,
-    }));
-
-    function resize() {
-      width = canvas.width = window.innerWidth;
-      height = canvas.height = window.innerHeight;
-    }
-
-    function draw() {
-      ctx.clearRect(0, 0, width, height);
-      time += 0.016;
-
-      for (const star of stars) {
-        star.twinkle += star.speed;
-        const alpha = 0.25 + Math.sin(star.twinkle) * 0.25;
-        ctx.beginPath();
-        ctx.arc(star.x * width, star.y * height, star.r, 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(200,240,255,${alpha})`;
-        ctx.fill();
-      }
-
-      for (const wave of waves) {
-        ctx.beginPath();
-        const baseY = wave.y * height;
-        ctx.moveTo(0, height);
-
-        for (let x = 0; x <= width; x += 3) {
-          const y =
-            baseY +
-            Math.sin(x * wave.freq + time * wave.speed * 60 + wave.phase) * wave.amp +
-            Math.sin(x * wave.freq * 2.1 + time * wave.speed * 35) * wave.amp * 0.35 +
-            Math.sin(x * wave.freq * 0.5 + time * wave.speed * 20) * wave.amp * 0.2;
-          ctx.lineTo(x, y);
-        }
-
-        ctx.lineTo(width, height);
-        ctx.closePath();
-
-        const gradient = ctx.createLinearGradient(0, baseY - wave.amp * 1.5, 0, baseY + wave.amp);
-        gradient.addColorStop(0, `hsla(${wave.hue},85%,72%,${wave.alpha * 2})`);
-        gradient.addColorStop(0.5, `hsla(${wave.hue + 30},90%,65%,${wave.alpha})`);
-        gradient.addColorStop(1, `hsla(${wave.hue + 60},80%,55%,0)`);
-        ctx.fillStyle = gradient;
-        ctx.fill();
-      }
-
-      frameId = window.requestAnimationFrame(draw);
-    }
-
-    resize();
-    window.addEventListener("resize", resize);
-    draw();
-
-    return () => {
-      window.removeEventListener("resize", resize);
-      window.cancelAnimationFrame(frameId);
-    };
-  }, []);
+  const [cameraInfo, setCameraInfo] = useState({
+    state: "idle",
+    name: "Searching...",
+    resolution: "Auto",
+    frameRate: "Auto",
+    facing: "user",
+    error: "",
+  });
+  const [voiceCommands, setVoiceCommands] = useState([]);
+  const [voiceMessage, setVoiceMessage] = useState("Loading recent commands...");
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatInput, setChatInput] = useState("");
+  const [chatMessages, setChatMessages] = useState([
+    {
+      role: "assistant",
+      text: "Hi! Ask me about Blink-Click Virtual Mouse, or start Ollama for broader questions.",
+    },
+  ]);
+  const [chatStatus, setChatStatus] = useState({ state: "idle", message: "" });
+  const [cameraEnabled, setCameraEnabled] = useState(true);
+  const [voiceEnabled, setVoiceEnabled] = useState(true);
+  const [micListening, setMicListening] = useState(false);
+  const [micStatus, setMicStatus] = useState("");
+  const micStatusId = "mic-status-live";
+  const speechRef = useRef(null);
+  const micStopTimerRef = useRef(null);
+  const micRestartTimerRef = useRef(null);
+  const micPreventAutoRestartRef = useRef(false);
 
   useEffect(() => {
     let active = true;
@@ -219,6 +213,176 @@ export default function BlinkClick() {
     };
   }, []);
 
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setActiveSlide((current) => (current + 1) % controlSlides.length);
+    }, 2600);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    let stream = null;
+
+    async function initCamera() {
+      if (!cameraEnabled) {
+        if (videoRef.current) {
+          videoRef.current.srcObject = null;
+        }
+        setCameraInfo({
+          state: "idle",
+          name: "Camera off",
+          resolution: "Disabled",
+          frameRate: "Disabled",
+          facing: "user",
+          error: "",
+        });
+        return;
+      }
+
+      if (status.running) {
+        if (videoRef.current) {
+          videoRef.current.srcObject = null;
+        }
+        setCameraInfo({
+          state: "busy",
+          name: "Engine in control",
+          resolution: "In use",
+          frameRate: "In use",
+          facing: "user",
+          error: "Camera is reserved by the running engine. Stop the project to preview here.",
+        });
+        return;
+      }
+
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        setCameraInfo({
+          state: "error",
+          name: "Camera unavailable",
+          resolution: "Unavailable",
+          frameRate: "Unavailable",
+          facing: "unknown",
+          error: "Camera access is not supported in this browser.",
+        });
+        return;
+      }
+
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        if (!active) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
+        }
+
+        const track = stream.getVideoTracks()[0];
+        const settings = track?.getSettings ? track.getSettings() : {};
+        const name = track?.label || "Default Camera";
+        const resolution = settings.width && settings.height ? `${settings.width} x ${settings.height}` : "Auto";
+        const frameRate = settings.frameRate ? `${Math.round(settings.frameRate)} fps` : "Auto";
+        const facing = settings.facingMode || "user";
+
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
+
+        setCameraInfo({
+          state: "active",
+          name,
+          resolution,
+          frameRate,
+          facing,
+          error: "",
+        });
+      } catch (error) {
+        if (!active) {
+          return;
+        }
+        setCameraInfo({
+          state: "error",
+          name: "Camera blocked",
+          resolution: "Unavailable",
+          frameRate: "Unavailable",
+          facing: "unknown",
+          error: error?.message || "Camera access was denied.",
+        });
+      }
+    }
+
+    initCamera();
+
+    return () => {
+      active = false;
+      if (stream) {
+        stream.getTracks().forEach((track) => track.stop());
+      }
+    };
+  }, [status.running, cameraEnabled]);
+
+  useEffect(() => {
+    if (!voiceEnabled) {
+      stopMicListening("Mic is off.", true);
+      return;
+    }
+
+    if (!status.running) {
+      stopMicListening("Project is not running. Mic idle.", true);
+      return;
+    }
+
+    if (!micListening) {
+      startMicListening("Mic listening for 10 seconds...");
+    }
+  }, [voiceEnabled, status.running, micListening]);
+
+  useEffect(() => {
+    return () => {
+      stopMicListening("", true);
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+
+    async function pollCommands() {
+      try {
+        const response = await fetch("/api/voice-commands");
+        const data = await readJsonSafe(response);
+        if (!active) {
+          return;
+        }
+
+        const commands = Array.isArray(data.commands) ? data.commands : [];
+        setVoiceCommands(commands);
+        setVoiceMessage(data.message || "Recent commands from system logs.");
+      } catch {
+        if (!active) {
+          return;
+        }
+        setVoiceCommands([]);
+        setVoiceMessage("Could not load voice commands.");
+      }
+    }
+
+    pollCommands();
+    const timer = window.setInterval(pollCommands, 5000);
+
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (status.running) {
+      return;
+    }
+    setVoiceCommands([]);
+    setVoiceMessage("Project is not running. Recent commands cleared.");
+  }, [status.running]);
+
   async function handleStart() {
     setIsStarting(true);
     startTransition(() => {
@@ -253,106 +417,599 @@ export default function BlinkClick() {
     }
   }
 
-  return (
-    <div className="bc-root">
-      <div className="hex-grid" />
-      <canvas id="ac" ref={canvasRef} />
+  async function handleChatSend() {
+    const text = chatInput.trim();
+    if (!text || chatStatus.state === "sending") {
+      return;
+    }
+    setChatInput("");
+    setChatMessages((prev) => [...prev, { role: "user", text }]);
+    setChatStatus({ state: "sending", message: "Thinking..." });
 
-      <div className="page">
-        <div className="title-section">
-          <div className="badge">// Accessibility-first desktop assistant</div>
-          <BlurText
-            text="Implementation of Eye-Controlled Virtual Mouse with Blink Click and Voice Recognition"
-            className="project-title"
-            animateBy="words"
-            direction="top"
-            delay={120}
-            as="h1"
-          />
-          <p className="desc">
-            This project lets users control a computer cursor with face and eye movement, perform click actions with
-            blinks, and trigger commands with voice for a practical hands-free experience.
-          </p>
-          <p className="desc desc-extra">
-            It is designed for accessibility-focused use cases where keyboard or mouse usage is difficult. Visitors can
-            quickly understand what the system does, how it helps, and how to start using it from this page.
-          </p>
+    try {
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: text }),
+      });
+      const data = await readJsonSafe(response);
+      if (!response.ok) {
+        throw new Error(data?.error || "Chat service unavailable.");
+      }
+      const reply = data?.reply || "I did not get a reply.";
+      setChatMessages((prev) => [...prev, { role: "assistant", text: reply }]);
+      setChatStatus({ state: "idle", message: "" });
+    } catch (error) {
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          text: error?.message || "Chat service is unavailable.",
+        },
+      ]);
+      setChatStatus({ state: "error", message: "Chat service unavailable." });
+    }
+  }
+
+  function getSpeechRecognizer() {
+    if (speechRef.current) {
+      return speechRef.current;
+    }
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      return null;
+    }
+    const recognizer = new SpeechRecognition();
+    recognizer.lang = "en-IN";
+    recognizer.interimResults = false;
+    recognizer.continuous = false;
+    speechRef.current = recognizer;
+    return recognizer;
+  }
+
+  function clearMicTimers() {
+    if (micStopTimerRef.current) {
+      window.clearTimeout(micStopTimerRef.current);
+      micStopTimerRef.current = null;
+    }
+    if (micRestartTimerRef.current) {
+      window.clearTimeout(micRestartTimerRef.current);
+      micRestartTimerRef.current = null;
+    }
+  }
+
+  function stopMicListening(message = "Mic stopped.", preventAutoRestart = true) {
+    if (preventAutoRestart) {
+      micPreventAutoRestartRef.current = true;
+    }
+    clearMicTimers();
+
+    const recognizer = speechRef.current;
+    if (recognizer) {
+      try {
+        recognizer.onresult = null;
+        recognizer.onend = null;
+        recognizer.onerror = null;
+        recognizer.stop();
+      } catch {
+        // ignore stop errors
+      }
+    }
+    setMicListening(false);
+    if (message) {
+      setMicStatus(message);
+    }
+  }
+
+  function startMicListening(message = "Mic listening for 10 seconds...") {
+    if (!voiceEnabled || !status.running || micListening) {
+      return;
+    }
+
+    const recognizer = getSpeechRecognizer();
+    if (!recognizer) {
+      setMicStatus("Speech recognition not supported in this browser.");
+      return;
+    }
+
+    clearMicTimers();
+    micPreventAutoRestartRef.current = false;
+    setMicListening(true);
+    setMicStatus(message);
+
+    recognizer.onresult = (event) => {
+      const transcript = Array.from(event.results)
+        .map((result) => result[0]?.transcript || "")
+        .join(" ")
+        .trim();
+      if (transcript) {
+        setChatInput((prev) => (prev ? `${prev} ${transcript}` : transcript));
+        setMicStatus("Captured voice input.");
+      }
+    };
+    recognizer.onerror = () => {
+      setMicStatus("Mic error. Try again.");
+      setMicListening(false);
+    };
+    recognizer.onend = () => {
+      setMicListening(false);
+
+      const blockRestart = micPreventAutoRestartRef.current || !voiceEnabled || !status.running;
+      micPreventAutoRestartRef.current = false;
+
+      if (!blockRestart) {
+        setMicStatus("Auto mode: restarting mic...");
+        micRestartTimerRef.current = window.setTimeout(() => {
+          startMicListening("Mic listening for 10 seconds...");
+        }, MIC_AUTO_RESTART_DELAY_MS);
+      }
+    };
+
+    try {
+      recognizer.start();
+      micStopTimerRef.current = window.setTimeout(() => {
+        stopMicListening("Mic auto-stopped after 10 seconds.", false);
+      }, MIC_LISTEN_WINDOW_MS);
+    } catch {
+      setMicListening(false);
+      setMicStatus("Mic could not start.");
+    }
+  }
+
+  function handleMicToggle() {
+    if (voiceEnabled) {
+      setVoiceEnabled(false);
+      stopMicListening("Mic turned off.", true);
+    } else {
+      setVoiceEnabled(true);
+      if (status.running) {
+        startMicListening("Mic listening for 10 seconds...");
+      } else {
+        setMicStatus("Mic is on. Start project to begin listening.");
+      }
+    }
+  }
+
+  function handleChatKeyDown(event) {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      handleChatSend();
+    }
+  }
+
+  const voiceCommandItems = voiceCommands
+    .map((entry) => {
+      if (!entry) return null;
+      if (typeof entry === "string") {
+        return { time: "", text: entry };
+      }
+      if (typeof entry === "object") {
+        return {
+          time: entry.time || "",
+          text: entry.text || "",
+        };
+      }
+      return null;
+    })
+    .filter((entry) => entry && entry.text);
+
+  return (
+    <div className="dashboard-root">
+      <aside className="side-nav">
+        <div className="brand-block">
+          <h1>Blink Click</h1>
+          <p>Precision: 98%</p>
         </div>
 
-        <div className="start-section">
-          <div className="btn-row">
-            <div className="start-wrap">
-              {!isStarting && !status.running && <div className="orb-ring" />}
-              <button className="start-btn" onClick={handleStart} disabled={isStarting || status.running} type="button">
-                {status.running ? "Running" : isStarting ? "Starting..." : "Start Project"}
+        <nav className="side-nav-items">
+          <a className="active" href="#dashboard">
+            <span className="material-symbols-outlined">monitoring</span>
+            <span>Dashboard</span>
+          </a>
+          <a href="#calibration">
+            <span className="material-symbols-outlined">center_focus_strong</span>
+            <span>Calibration</span>
+          </a>
+          <a href="#voice-config">
+            <span className="material-symbols-outlined">record_voice_over</span>
+            <span>Voice Config</span>
+          </a>
+        </nav>
+
+        <div className="side-footer">
+          <div className="system-state">System Status: {status.running ? "Active" : "Standby"}</div>
+          <a href="#">
+            <span className="material-symbols-outlined">help</span>
+            <span>Help</span>
+          </a>
+        </div>
+      </aside>
+
+      <header className="top-bar">
+        <div className="top-pills">
+          <span className="material-symbols-outlined pulse">videocam</span>
+          <span className="material-symbols-outlined muted">mic</span>
+          <span className="material-symbols-outlined glow">sensors</span>
+        </div>
+      </header>
+
+      <main className="main-canvas">
+        <div className="grid-hero" id="dashboard">
+          <section className="engine-card">
+            <div>
+              <h2>Smart Control Engine</h2>
+              <p>
+                Real-time eye tracking and blink detection are used to move the cursor and perform click actions
+                seamlessly.
+              </p>
+            </div>
+
+            <div className="engine-modules">
+              <label>Active Modules</label>
+              <div>
+                {engineModules.map((module) => (
+                  <span key={module}>{module}</span>
+                ))}
+              </div>
+            </div>
+
+            <div className="engine-action-wrap">
+              <button className="engine-button" onClick={handleStart} disabled={isStarting || status.running} type="button">
+                <div>
+                  <span className="material-symbols-outlined">power_settings_new</span>
+                  <strong>{status.running ? "ACTIVE" : isStarting ? "STARTING" : "START"}</strong>
+                </div>
               </button>
             </div>
-            <div className="status-pill">
-              <div className={`sdot ${status.running ? "running" : status.state === "error" ? "error" : ""}`.trim()} />
-              <span>{status.running ? "Running" : status.state === "starting" ? "Starting..." : status.state === "error" ? "Error" : "Ready"}</span>
-              {status.state === "starting" && <div className="spinner-s" />}
+
+            <div className="engine-footer">
+              <div className="accuracy-main">
+                <label>Project Accuracy</label>
+                <div>
+                  98.4<span>%</span>
+                </div>
+              </div>
+
+              <div className="accuracy-sub">
+                <div className="accuracy-chip">
+                  <span className={`dot ${status.running ? "on" : status.state === "error" ? "err" : ""}`.trim()} />
+                  <strong>{status.running ? "LIVE" : status.state === "error" ? "ALERT" : "READY"}</strong>
+                </div>
+                <small>Tracking Confidence: 96.9%</small>
+                <small>Blink Precision: 97.8%</small>
+              </div>
+            </div>
+          </section>
+
+          <section className="right-stack">
+            <article className="panel">
+              <div className="panel-head">
+                <div>
+                  <h3>Spatial Gaze</h3>
+                  <p>Core control intelligence modules</p>
+                </div>
+                <span className="material-symbols-outlined">3d_rotation</span>
+              </div>
+              <div className="viz-box">
+                <span>HOW IT WORKS</span>
+                <div className="control-slider">
+                  {controlSlides.map((slide, idx) => (
+                    <article className={`control-card ${idx === activeSlide ? "active" : ""}`.trim()} key={slide.title}>
+                      <img src={slide.image} alt={slide.title} loading="lazy" />
+                    </article>
+                  ))}
+                </div>
+                <div className="control-dots">
+                  {controlSlides.map((slide, idx) => (
+                    <span className={idx === activeSlide ? "active" : ""} key={slide.title + idx} />
+                  ))}
+                </div>
+              </div>
+            </article>
+
+            <article className="panel">
+              <div className="panel-head inline">
+                <h3>Blink Response</h3>
+                <div className="active-pill">
+                  <span />
+                  <small>Active</small>
+                </div>
+              </div>
+              <div className="wave-stack">
+                <div className="wave-row">
+                  <span className="wave-label">Blink</span>
+                  <div className="waveform blink">
+                    {Array.from({ length: 18 }).map((_, idx) => (
+                      <span key={`blink-${idx}`} />
+                    ))}
+                  </div>
+                </div>
+                <div className="wave-row">
+                  <span className="wave-label">Voice</span>
+                  <div className="waveform voice">
+                    {Array.from({ length: 18 }).map((_, idx) => (
+                      <span key={`voice-${idx}`} />
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <div className="meta-line">
+                <span>BLINK: 0.15s</span>
+                <span>VOICE: 0.12s</span>
+              </div>
+            </article>
+          </section>
+        </div>
+
+        <section className="project-info">
+          <div className="project-top">
+            <div>
+              <h3>Project Information</h3>
+              <p>
+                Blink-Click Virtual Mouse works as a real-time accessibility pipeline that transforms face, eye, and
+                voice signals into full hands-free computer control.
+              </p>
             </div>
           </div>
-          <div className={`smsg ${status.running ? "running" : status.state === "error" ? "error" : ""}`.trim()}>
-            {status.message}
-          </div>
-          <div className="ptrack">
-            <div
-              className={`pbar ${status.state === "starting" ? "ind" : ""}`.trim()}
-              style={{ width: status.state === "running" ? "100%" : status.state === "starting" ? "38%" : "0%" }}
-            />
-          </div>
-        </div>
 
-        <div className="divider" />
-
-        <div className="info-row">
-          {highlights.map((item) => (
-            <div className="icard" key={item.cat}>
-              <div className="cat">{item.cat}</div>
-              <div className="val">{item.val}</div>
-            </div>
-          ))}
-        </div>
-
-        <div className="lower">
-          <div className="scard">
-            <h2>What it offers</h2>
-            {offerings.map((item) => (
-              <div className="feat" key={item.title}>
-                <h3>{item.title}</h3>
-                <p>{item.text}</p>
-              </div>
-            ))}
-          </div>
-
-          <div className="scard">
-            <h2>Getting started</h2>
-            {steps.map((step, index) => (
-              <div className="step" key={step}>
-                <div className="snum">{index + 1}</div>
-                <p>{step}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <section className="detail-section" aria-label="Detailed project overview">
-          <h2>Detailed Project Overview</h2>
-          <p className="detail-intro">
-            This project is designed as a complete contactless human-computer interaction system that combines
-            computer vision and speech recognition to improve accessibility and ease of use.
-          </p>
-          <div className="detail-grid">
-            {overviewBlocks.map((block) => (
-              <article className="detail-card" key={block.title}>
-                <h3>{block.title}</h3>
-                <p>{block.text}</p>
+          <div className="workflow-list">
+            {projectWorkflow.map((step) => (
+              <article className="workflow-card" key={step.title}>
+                <div className="workflow-head">
+                  <span>{step.icon}</span>
+                  <h4>{step.title}</h4>
+                </div>
+                <p>{step.text}</p>
+                {step.points ? (
+                  <ul>
+                    {step.points.map((point) => (
+                      <li key={point}>{point}</li>
+                    ))}
+                  </ul>
+                ) : null}
               </article>
             ))}
           </div>
         </section>
-      </div>
+
+        <section className="tools-showcase">
+          <div className="tools-head">
+            <h3>Tools Used In Project</h3>
+            <p>Three core technologies powering tracking, command understanding, and execution.</p>
+          </div>
+
+          <div className="tools-grid">
+            {toolsUsed.map((tool) => (
+              <article className="tool-card" key={tool.name}>
+                <img src={tool.image} alt={tool.name} loading="lazy" />
+                <h4>{tool.name}</h4>
+                <p>{tool.description}</p>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section className="section-block calibration-block" id="calibration">
+          <header className="section-head">
+            <div>
+              <h3>Calibration</h3>
+              <p>Live camera feed, facial geometry checks, and tracking readiness.</p>
+            </div>
+            <span className={`status-pill ${cameraInfo.state}`.trim()}>
+              {cameraInfo.state === "active"
+                ? "Camera Active"
+                : cameraInfo.state === "busy"
+                  ? "Engine Using Camera"
+                  : cameraInfo.state === "error"
+                    ? "Camera Blocked"
+                    : "Checking"}
+            </span>
+          </header>
+
+          <div className="calibration-grid">
+            <article className="panel calibration-camera">
+              <div className="panel-head inline">
+                <div>
+                  <h3>Camera Preview</h3>
+                  <p>System-accessed camera stream</p>
+                </div>
+                <span className="material-symbols-outlined">photo_camera_front</span>
+              </div>
+              <div className="camera-frame">
+                <video
+                  ref={videoRef}
+                  autoPlay
+                  muted
+                  playsInline
+                  aria-label="Live camera preview used for face and blink tracking"
+                />
+                <div className="camera-overlay">
+                  <div className="overlay-grid" />
+                  <div className="overlay-target" />
+                </div>
+                {cameraInfo.state === "error" ? <div className="camera-error">{cameraInfo.error}</div> : null}
+                <button
+                  className={`mic-toggle ${voiceEnabled ? "on" : ""}`.trim()}
+                  type="button"
+                  onClick={handleMicToggle}
+                  aria-pressed={voiceEnabled}
+                  aria-controls={micStatusId}
+                  aria-label={
+                    voiceEnabled
+                      ? "Turn microphone off"
+                      : "Turn microphone on with automatic 10 second listening"
+                  }
+                  title={
+                    voiceEnabled
+                      ? "Mic is on. Click to turn off"
+                      : "Mic is off. Click to turn on auto 10 second listening"
+                  }
+                >
+                  <span className="material-symbols-outlined">{voiceEnabled ? "mic" : "mic_off"}</span>
+                  <span>{voiceEnabled ? (micListening ? "Mic On (Auto)" : "Mic On") : "Mic Off"}</span>
+                </button>
+              </div>
+              {micStatus ? (
+                <div id={micStatusId} className="mic-status" role="status" aria-live="polite" aria-atomic="true">
+                  {micStatus}
+                </div>
+              ) : null}
+              <div className="camera-meta">
+                <div>
+                  <label>Device</label>
+                  <span>{cameraInfo.name}</span>
+                </div>
+                <div>
+                  <label>Resolution</label>
+                  <span>{cameraInfo.resolution}</span>
+                </div>
+                <div>
+                  <label>Frame Rate</label>
+                  <span>{cameraInfo.frameRate}</span>
+                </div>
+                <div>
+                  <label>Facing</label>
+                  <span>{cameraInfo.facing}</span>
+                </div>
+              </div>
+            </article>
+
+            <article className="panel calibration-info">
+              <div className="panel-head inline">
+                <div>
+                  <h3>Facial Tracking</h3>
+                  <p>Essential diagnostics for calibration</p>
+                </div>
+                <span className="material-symbols-outlined">face</span>
+              </div>
+              <div className="stat-grid">
+                {calibrationStats.map((stat) => (
+                  <div className="stat-card" key={stat.label}>
+                    <h4>{stat.label}</h4>
+                    <strong>{stat.value}</strong>
+                    <span>{stat.note}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="checklist">
+                <h4>Calibration Checklist</h4>
+                <ul>
+                  {faceChecklist.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section className="section-block voice-block" id="voice-config">
+          <header className="section-head">
+            <div>
+              <h3>Voice Configuration</h3>
+              <p>Commands captured from the assistant session logs.</p>
+            </div>
+            <span className="status-pill active">Listening</span>
+          </header>
+
+          <div className="voice-grid">
+            <article className="panel voice-console">
+              <div className="panel-head inline">
+                <div>
+                  <h3>Recent User Commands</h3>
+                  <p>{voiceMessage}</p>
+                </div>
+                <span className="material-symbols-outlined">graphic_eq</span>
+              </div>
+              <div className="command-list">
+                {voiceCommandItems.length ? (
+                  voiceCommandItems.map((command, index) => (
+                    <div className="command-row" key={`${command.text}-${index}`}>
+                      <span className="command-time">{command.time || "Now"}</span>
+                      <span className="command-text">{command.text}</span>
+                    </div>
+                  ))
+                ) : (
+                  <div className="command-empty">No user commands detected yet.</div>
+                )}
+              </div>
+            </article>
+
+            <article className="panel voice-settings">
+              <div className="panel-head inline">
+                <div>
+                  <h3>Voice Tuning</h3>
+                </div>
+                <span className="material-symbols-outlined">tune</span>
+              </div>
+              <div className="voice-defaults">
+                {voiceDefaults.map((item) => (
+                  <div className="voice-chip" key={item}>
+                    {item}
+                  </div>
+                ))}
+              </div>
+              <div className="voice-stats">
+                <div>
+                  <label>Detection Latency</label>
+                  <span>0.12s average</span>
+                </div>
+                <div>
+                  <label>Confidence</label>
+                  <span>96%</span>
+                </div>
+                <div>
+                  <label>Microphone</label>
+                  <span>Front array (Active)</span>
+                </div>
+              </div>
+            </article>
+          </div>
+        </section>
+
+
+        <button className="fab" type="button" onClick={() => setChatOpen(true)}>
+          <span className="material-symbols-outlined">bolt</span>
+        </button>
+
+        {chatOpen ? (
+          <div className="chat-overlay" onClick={() => setChatOpen(false)}>
+            <div className="chat-panel" onClick={(event) => event.stopPropagation()}>
+              <div className="chat-head">
+                <div>
+                  <h3>Assistant</h3>
+                  <p>{chatStatus.state === "sending" ? "Thinking..." : "Ask a question"}</p>
+                </div>
+                <button className="chat-close" type="button" onClick={() => setChatOpen(false)}>
+                  <span className="material-symbols-outlined">close</span>
+                </button>
+              </div>
+              <div className="chat-body">
+                {chatMessages.map((message, index) => (
+                  <div
+                    className={`chat-row ${message.role === "user" ? "user" : "assistant"}`}
+                    key={`${message.role}-${index}`}
+                  >
+                    <span>{message.text}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="chat-input">
+                <textarea
+                  placeholder="Type your message..."
+                  value={chatInput}
+                  onChange={(event) => setChatInput(event.target.value)}
+                  onKeyDown={handleChatKeyDown}
+                  rows={2}
+                />
+                <button type="button" onClick={handleChatSend} disabled={!chatInput.trim()}>
+                  Send
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+      </main>
     </div>
   );
 }
