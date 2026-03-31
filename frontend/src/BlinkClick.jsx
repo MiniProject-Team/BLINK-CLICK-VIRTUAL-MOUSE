@@ -942,6 +942,28 @@ export default function BlinkClick() {
                 </div>
                 <span className="material-symbols-outlined">tune</span>
               </div>
+              <div className="voice-mic-control">
+                <button
+                  className={`mic-toggle voice-mic-toggle ${voiceEnabled ? "on" : ""}`.trim()}
+                  type="button"
+                  onClick={handleMicToggle}
+                  aria-pressed={voiceEnabled}
+                  aria-controls={micStatusId}
+                  aria-label={
+                    voiceEnabled
+                      ? "Turn microphone off"
+                      : "Turn microphone on with automatic 10 second listening"
+                  }
+                  title={
+                    voiceEnabled
+                      ? "Mic is on. Click to turn off"
+                      : "Mic is off. Click to turn on auto 10 second listening"
+                  }
+                >
+                  <span className="material-symbols-outlined">{voiceEnabled ? "mic" : "mic_off"}</span>
+                  <span>{voiceEnabled ? (micListening ? "Mic On (Auto)" : "Mic On") : "Mic Off"}</span>
+                </button>
+              </div>
               <div className="voice-defaults">
                 {voiceDefaults.map((item) => (
                   <div className="voice-chip" key={item}>

@@ -1168,7 +1168,7 @@ html {
   position: absolute;
   right: 0.9rem;
   bottom: 0.9rem;
-  z-index: 5;
+  z-index: 20;
   display: inline-flex;
   align-items: center;
   gap: 0.45rem;
@@ -1187,6 +1187,20 @@ html {
   border-color: rgba(0, 253, 193, 0.6);
   color: var(--primary);
   box-shadow: 0 0 16px rgba(0, 253, 193, 0.3);
+}
+
+.voice-mic-control {
+  margin: 0.2rem 0 0.9rem;
+}
+
+.voice-mic-toggle {
+  position: static;
+  right: auto;
+  bottom: auto;
+  width: 100%;
+  justify-content: center;
+  padding: 0.55rem 0.8rem;
+  background: rgba(9, 12, 17, 0.95);
 }
 
 .mic-toggle:focus-visible {
