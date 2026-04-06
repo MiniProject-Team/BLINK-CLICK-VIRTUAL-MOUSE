@@ -16,12 +16,12 @@ from __future__ import annotations
 
 import cv2
 import logging
+import os
 import sys
 import time
 from typing import Optional
 
 import pyautogui
-import os
 
 # ── Project modules ──────────────────────────────────────────────
 from mouse_controller import (
@@ -41,6 +41,7 @@ from mouse_controller import (
     draw_voice_status,
 )
 from speech_controller import (
+    CloudBrain,
     OllamaBrain,
     SR_AVAILABLE,
     TTS_AVAILABLE,
@@ -62,6 +63,10 @@ STOP_BUTTON_X = 14
 STOP_BUTTON_Y = 14
 STOP_BUTTON_W = 110
 STOP_BUTTON_H = 36
+MIC_BUTTON_X = STOP_BUTTON_X + STOP_BUTTON_W + 12
+MIC_BUTTON_Y = 14
+MIC_BUTTON_W = 128
+MIC_BUTTON_H = 36
 
 
 # ================================================================
@@ -71,6 +76,7 @@ def _print_banner(
     assistant: Optional[AssistantVoice],
     voice: Optional[VoiceController],
     brain: Optional[OllamaBrain],
+    cloud_brain: Optional[CloudBrain],
     cfg: MouseConfig,
 ) -> None:
     print("\n" + "═" * 62)
@@ -79,12 +85,31 @@ def _print_banner(
     print(f"  TTS        : {'Active  (will speak back)' if assistant else 'Disabled'}")
     if voice:
         mode = "rules + Ollama" if brain else "rules only"
+        if cloud_brain:
+            mode = "rules + Ollama + cloud" if brain else "rules + cloud"
         print(f"  Voice In   : Active  (say '{voice.wake_word}' to wake, {mode})")
     else:
         print("  Voice In   : Disabled")
-    print(f"  Brain      : {'Ollama ' + brain.model if brain else 'Disabled'}")
+    if brain and cloud_brain:
+        brain_label = f"Ollama {brain.model} + Cloud {cloud_brain.model}"
+    elif brain:
+        brain_label = f"Ollama {brain.model}"
+    elif cloud_brain:
+        brain_label = f"Cloud {cloud_brain.model}"
+    else:
+        brain_label = "Disabled"
+    print(f"  Brain      : {brain_label}")
     if voice:
         print(f"  Wake Word  : {voice.wake_word}")
+        print(f"  Languages  : {', '.join(voice.languages)}")
+        if voice.conversation_mode_enabled:
+            print(
+                f"  Follow-up  : {voice.conversation_timeout_s:.0f}s "
+                "conversation window"
+            )
+        print("  Mic Ctrl   : Click MIC button in window or press M")
+    else:
+        print("  Mic Ctrl   : Unavailable (voice input disabled)")
     print( "  Cursor     : Head tracking (nose position)")
     print(f"  Blink Click: EAR threshold {cfg.blink_threshold}")
     print(f"  Click Cool : {cfg.click_cooldown_s:.2f}s")
@@ -153,6 +178,46 @@ def _draw_stop_button(frame, hover: bool) -> tuple[int, int, int, int]:
         frame,
         "STOP",
         (x1 + 24, y1 + 24),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.62,
+        (255, 255, 255),
+        2,
+        cv2.LINE_AA,
+    )
+
+    return x1, y1, x2, y2
+
+
+def _draw_mic_button(
+    frame,
+    *,
+    hover: bool,
+    mic_available: bool,
+    mic_enabled: bool,
+) -> tuple[int, int, int, int]:
+    """Draw a clickable mic toggle button and return its rect."""
+    x1, y1 = MIC_BUTTON_X, MIC_BUTTON_Y
+    x2, y2 = x1 + MIC_BUTTON_W, y1 + MIC_BUTTON_H
+
+    if not mic_available:
+        bg_color = (80, 80, 80)
+        border_color = (115, 115, 115)
+        label = "MIC N/A"
+    elif mic_enabled:
+        bg_color = (20, 150, 35) if not hover else (30, 180, 45)
+        border_color = (60, 220, 80)
+        label = "MIC ON"
+    else:
+        bg_color = (25, 25, 160) if not hover else (35, 35, 210)
+        border_color = (80, 80, 255)
+        label = "MIC OFF"
+
+    cv2.rectangle(frame, (x1, y1), (x2, y2), bg_color, -1)
+    cv2.rectangle(frame, (x1, y1), (x2, y2), border_color, 2)
+    cv2.putText(
+        frame,
+        label,
+        (x1 + 16, y1 + 24),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.62,
         (255, 255, 255),
@@ -239,6 +304,7 @@ def main() -> None:
     voice: Optional[VoiceController] = None
     voice_processor: Optional[VoiceCommandProcessor] = None
     brain: Optional[OllamaBrain] = None
+    cloud_brain: Optional[CloudBrain] = None
 
     if os.environ.get("OLLAMA_BRAIN", "1").lower() not in ("0", "false", "off"):
         timeout_s = 25.0
@@ -252,6 +318,35 @@ def main() -> None:
             timeout_s=timeout_s,
         )
         logger.info("Ollama brain enabled (model=%s)", brain.model)
+
+    cloud_api_key = (
+        os.environ.get("CLOUD_BRAIN_API_KEY")
+        or os.environ.get("OPENAI_API_KEY")
+        or ""
+    ).strip()
+    cloud_requested = os.environ.get("CLOUD_BRAIN")
+    cloud_enabled = (cloud_requested or "1").lower() not in ("0", "false", "off")
+    if cloud_enabled and cloud_api_key:
+        cloud_timeout_s = 18.0
+        try:
+            cloud_timeout_s = float(os.environ.get("CLOUD_BRAIN_TIMEOUT", "18"))
+        except ValueError:
+            logger.warning("Invalid CLOUD_BRAIN_TIMEOUT value; using 18 seconds")
+        cloud_brain = CloudBrain(
+            model=os.environ.get("CLOUD_BRAIN_MODEL", "gpt-4o-mini"),
+            api_key=cloud_api_key,
+            base_url=os.environ.get(
+                "CLOUD_BRAIN_BASE_URL",
+                "https://api.openai.com/v1",
+            ),
+            timeout_s=cloud_timeout_s,
+        )
+        logger.info("Cloud brain enabled (model=%s)", cloud_brain.model)
+    elif cloud_requested and cloud_enabled and not cloud_api_key:
+        logger.warning(
+            "CLOUD_BRAIN requested but no CLOUD_BRAIN_API_KEY or OPENAI_API_KEY "
+            "was provided."
+        )
 
     if SR_AVAILABLE:
         try:
@@ -268,8 +363,8 @@ def main() -> None:
             voice = VoiceController(
                 assistant=assistant,
                 energy_threshold=_env_int("VOICE_ENERGY_THRESHOLD", 350),
-                pause_threshold=_env_float("VOICE_PAUSE_THRESHOLD", 0.6),
-                phrase_threshold=_env_float("VOICE_PHRASE_THRESHOLD", 0.3),
+                pause_threshold=_env_float("VOICE_PAUSE_THRESHOLD", 0.5),
+                phrase_threshold=_env_float("VOICE_PHRASE_THRESHOLD", 0.25),
                 calibration_duration=_env_float("VOICE_CALIBRATION_S", 2.5),
                 microphone_index=mic_index,
                 microphone_name=mic_name,
@@ -282,9 +377,16 @@ def main() -> None:
                 assistant=assistant,
                 voice=voice,
                 brain=brain,
+                cloud_brain=cloud_brain,
             )
-            if brain:
+            if brain and cloud_brain:
+                logger.info(
+                    "Voice controller active in hybrid mode with Ollama and cloud brain."
+                )
+            elif brain:
                 logger.info("Voice controller active in hybrid mode with Ollama brain.")
+            elif cloud_brain:
+                logger.info("Voice controller active in hybrid mode with cloud brain.")
             else:
                 logger.info("Voice controller active in rule-based mode (Ollama disabled).")
         except Exception as exc:
@@ -293,23 +395,53 @@ def main() -> None:
         logger.warning("Voice input disabled because SpeechRecognition is unavailable.")
 
     # ── Banner ───────────────────────────────────────────────────
-    _print_banner(assistant, voice, brain, cfg)
+    _print_banner(assistant, voice, brain, cloud_brain, cfg)
 
     stop_button_state = {
         "rect": (0, 0, 0, 0),
         "hover": False,
         "clicked": False,
     }
+    mic_button_state = {
+        "rect": (0, 0, 0, 0),
+        "hover": False,
+        "clicked": False,
+    }
+
+    def _toggle_microphone(source: str) -> None:
+        if voice:
+            next_state = not voice.mic_enabled
+            voice.set_mic_enabled(next_state)
+            state_label = "ON" if next_state else "OFF"
+            logger.info("Microphone toggled %s by %s.", state_label, source)
+            print(f"[Voice] Microphone toggled {state_label} ({source})")
+            if assistant:
+                assistant.say("Microphone on" if next_state else "Microphone off")
+        else:
+            logger.info(
+                "Mic toggle requested by %s but voice controller is unavailable.",
+                source,
+            )
+            print(
+                "[Voice] Microphone control unavailable because voice input "
+                "is disabled."
+            )
 
     def _on_window_mouse(event, x, y, flags, param) -> None:
         _ = (flags, param)
-        x1, y1, x2, y2 = stop_button_state["rect"]
-        inside = x1 <= x <= x2 and y1 <= y <= y2
+        s_x1, s_y1, s_x2, s_y2 = stop_button_state["rect"]
+        m_x1, m_y1, m_x2, m_y2 = mic_button_state["rect"]
+        inside_stop = s_x1 <= x <= s_x2 and s_y1 <= y <= s_y2
+        inside_mic = m_x1 <= x <= m_x2 and m_y1 <= y <= m_y2
 
         if event == cv2.EVENT_MOUSEMOVE:
-            stop_button_state["hover"] = inside
-        elif event == cv2.EVENT_LBUTTONDOWN and inside:
-            stop_button_state["clicked"] = True
+            stop_button_state["hover"] = inside_stop
+            mic_button_state["hover"] = inside_mic
+        elif event == cv2.EVENT_LBUTTONDOWN:
+            if inside_stop:
+                stop_button_state["clicked"] = True
+            elif inside_mic:
+                mic_button_state["clicked"] = True
 
     cv2.namedWindow(WINDOW_TITLE)
     cv2.setMouseCallback(WINDOW_TITLE, _on_window_mouse)
@@ -392,12 +524,15 @@ def main() -> None:
 
             # ── VOICE COMMANDS ───────────────────────────────────
             if voice and voice_processor:
-                cmd = voice.get_command()
-                if cmd:
-                    should_exit = voice_processor.handle(cmd)
-                    drag_mode = voice_processor.drag_mode
-                    if should_exit:
+                while True:
+                    cmd = voice.get_command()
+                    if not cmd:
                         break
+                    voice_processor.submit(cmd)
+
+                drag_mode = voice_processor.drag_mode
+                if voice_processor.poll_should_exit():
+                    break
             # ── VOICE STATUS HUD ─────────────────────────────────
             if voice:
                 v_listening = voice.listening
@@ -412,7 +547,15 @@ def main() -> None:
             status_lines = [
                 f"Face  : {face_mesh.mode.upper()}",
                 f"Voice : {'ON  (wake)' if voice else 'OFF'}",
-                f"Brain : {'OLLAMA' if brain else 'OFF'}",
+                (
+                    "Brain : OLLAMA+CLOUD"
+                    if brain and cloud_brain
+                    else "Brain : OLLAMA"
+                    if brain
+                    else "Brain : CLOUD"
+                    if cloud_brain
+                    else "Brain : OFF"
+                ),
                 f"TTS   : {'ON' if assistant else 'OFF'}",
                 f"Drag  : {'ON' if drag_mode else 'OFF'}",
                 f"FPS   : {fps_display}",
@@ -440,6 +583,12 @@ def main() -> None:
                 frame,
                 hover=bool(stop_button_state["hover"]),
             )
+            mic_button_state["rect"] = _draw_mic_button(
+                frame,
+                hover=bool(mic_button_state["hover"]),
+                mic_available=bool(voice),
+                mic_enabled=bool(voice and voice.mic_enabled),
+            )
 
             # ── SHOW ─────────────────────────────────────────────
             cv2.imshow(WINDOW_TITLE, frame)
@@ -450,6 +599,15 @@ def main() -> None:
                 if assistant:
                     assistant.say("Stopping")
                 break
+
+            if mic_button_state["clicked"]:
+                mic_button_state["clicked"] = False
+                _toggle_microphone("button: MIC")
+                continue
+
+            if key in (ord("m"), ord("M")):
+                _toggle_microphone("hotkey: M")
+                continue
 
             if key == 27:
                 if now <= exit_armed_until:
@@ -475,6 +633,8 @@ def main() -> None:
     logger.info("Shutting down …")
     if voice_processor and voice_processor.drag_mode:
         pyautogui.mouseUp()
+    if voice_processor:
+        voice_processor.stop()
     if voice:
         voice.stop()
     if assistant:

@@ -13,7 +13,6 @@ from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-
 ROOT_DIR = Path(__file__).resolve().parent
 FRONTEND_DIR = ROOT_DIR / "frontend"
 DIST_DIR = FRONTEND_DIR / "dist"
@@ -133,6 +132,14 @@ def _tail_log(path: Path, max_lines: int = 12) -> str:
     return "\n".join(content.splitlines()[-max_lines:])
 
 
+def _read_log_lines(path: Path) -> list[str]:
+    try:
+        content = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    return content.splitlines()
+
+
 def _status_message() -> str:
     global _LAST_STATUS_MESSAGE
 
@@ -162,72 +169,25 @@ def _status_message() -> str:
     return _LAST_STATUS_MESSAGE
 
 
-def _extract_voice_commands(max_items: int = 8) -> list[dict]:
-    content = "\n".join(
-        part
-        for part in (
-            _tail_log(STDERR_LOG, max_lines=200),
-            _tail_log(STDOUT_LOG, max_lines=200),
-        )
-        if part
-    )
-    if not content:
-        return []
-
-    keywords = (
-        "user",
-        "command",
-        "recognized",
-        "transcript",
-        "[voice]",
-        "intent",
-        "utterance",
-        "said",
-        "request",
-    )
-    candidates: list[dict] = []
-    for line in content.splitlines():
-        lower = line.lower()
-        if not any(key in lower for key in keywords):
-            continue
-
+def _extract_voice_commands() -> list[dict]:
+    lines = _read_log_lines(STDERR_LOG)
+    history: list[dict] = []
+    for line_number, raw_line in enumerate(lines, start=1):
+        line = raw_line.rstrip("\r\n")
         time_match = re.match(r"^(?P<time>\d{2}:\d{2}:\d{2})\s+(?P<rest>.*)$", line)
         timestamp = ""
         message = line
         if time_match:
             timestamp = time_match.group("time")
             message = time_match.group("rest")
-
-        for token in ("INFO", "WARNING", "ERROR", "DEBUG"):
-            if token in message:
-                message = message.split(token, 1)[1].strip()
-                break
-
-        message = (
-            message.replace("[Assistant]", "")
-            .replace("[User]", "")
-            .replace("[Voice]", "")
-            .strip(" -")
+        history.append(
+            {
+                "line": line_number,
+                "time": timestamp,
+                "text": message if message else "(empty line)",
+            }
         )
-        if not message:
-            continue
-
-        candidates.append({"time": timestamp, "text": message})
-
-    if not candidates:
-        return []
-
-    seen: set[tuple[str, str]] = set()
-    deduped: list[dict] = []
-    for entry in reversed(candidates):
-        key = (entry["time"], entry["text"])
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(entry)
-
-    deduped.reverse()
-    return deduped[-max_items:]
+    return history
 
 
 def _start_project() -> tuple[bool, str]:
@@ -322,16 +282,19 @@ class FrontendHandler(SimpleHTTPRequestHandler):
             return
 
         if self.path == "/api/voice-commands":
-            if _is_running():
-                commands = _extract_voice_commands()
-                message = "Commands sourced from frontend_server.err"
+            commands = _extract_voice_commands()
+            if commands:
+                message = (
+                    f"Loaded {len(commands)} lines from {STDERR_LOG.name}. "
+                    "Showing complete session history."
+                )
             else:
-                commands = []
-                message = "Project is not running. Recent commands cleared."
+                message = f"No history found in {STDERR_LOG.name} yet."
             self._write_json(
                 {
                     "commands": commands,
                     "message": message,
+                    "source": STDERR_LOG.name,
                 }
             )
             return

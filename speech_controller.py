@@ -31,6 +31,21 @@ from typing import Any, Optional
 
 import pyautogui
 
+try:
+    import pygetwindow as gw
+except ImportError:  # pragma: no cover - optional dependency
+    gw = None
+
+try:
+    import numpy as np
+except ImportError:  # pragma: no cover - optional dependency
+    np = None
+
+try:
+    import noisereduce as nr
+except ImportError:  # pragma: no cover - optional dependency
+    nr = None
+
 logger = logging.getLogger(__name__)
 
 INPUT_DEVICE_KEYWORDS: tuple[str, ...] = (
@@ -53,6 +68,9 @@ SUPPORTED_STEP_ACTIONS: tuple[str, ...] = (
     "left_click",
     "right_click",
     "double_click",
+    "minimize",
+    "maximize",
+    "restore",
     "scroll",
     "drag_toggle",
     "type_text",
@@ -78,22 +96,98 @@ MAX_WAIT_SECONDS = 5.0
 DEFAULT_WAKE_WORD_MATCH_RATIO = 0.86
 DEFAULT_WAKE_WORD_PREFIX_TOKENS = 2
 DEFAULT_WAKE_WORD_COOLDOWN_S = 1.0
-DEFAULT_WAKE_LISTEN_TIMEOUT_S = 2.0
-DEFAULT_WAKE_PHRASE_LIMIT_S = 2.4
-DEFAULT_COMMAND_PHRASE_LIMIT_S = 6.0
+DEFAULT_WAKE_LISTEN_TIMEOUT_S = 1.8
+DEFAULT_WAKE_PHRASE_LIMIT_S = 2.1
+DEFAULT_COMMAND_PHRASE_LIMIT_S = 5.2
 DEFAULT_ERROR_FEEDBACK_COOLDOWN_S = 6.0
 LOCAL_STEP_WAIT_SECONDS = 0.8
 DEFAULT_VOICE_COMMAND_STALE_S = 4.0
 DEFAULT_VOICE_DUPLICATE_WINDOW_S = 1.4
 DEFAULT_VOICE_MAX_PENDING_COMMANDS = 2
 DEFAULT_MIC_LISTEN_WINDOW_S = 10.0
-DEFAULT_MIC_CYCLE_PAUSE_S = 0.8
+DEFAULT_MIC_CYCLE_PAUSE_S = 0.35
+DEFAULT_CONVERSATION_TIMEOUT_S = 9.0
+DEFAULT_AUDIO_TARGET_RMS = 0.085
+DEFAULT_AUDIO_MAX_GAIN = 4.0
+DEFAULT_NOISE_GATE_LEVEL = 0.01
+DEFAULT_AMBIENT_REFRESH_S = 45.0
+DEFAULT_AMBIENT_SAMPLE_S = 0.35
+DEFAULT_MIN_NR_AUDIO_S = 0.45
+DEFAULT_NR_SKIP_RMS_FACTOR = 1.8
+DEFAULT_CLOUD_TIMEOUT_S = 18.0
 
 VOICE_TEXT_REPLACEMENTS: tuple[tuple[str, str], ...] = (
-    ("you tube", "youtube"),
-    ("u tube", "youtube"),
     ("note pad", "notepad"),
     ("google chrome", "chrome"),
+    ("you tube", "youtube"),
+    ("u tube", "youtube"),
+    ("micro soft edge", "microsoft edge"),
+    ("minimise", "minimize"),
+    ("maximise", "maximize"),
+    ("आशु", "ashu"),
+    ("अशु", "ashu"),
+    ("हाँ", "yes"),
+    ("हां", "yes"),
+    ("नहीं", "no"),
+    ("मत", "no"),
+    ("रद्द", "cancel"),
+    ("राइट क्लिक", "right click"),
+    ("लेफ्ट क्लिक", "left click"),
+    ("स्क्रॉल नीचे", "scroll down"),
+    ("नीचे स्क्रॉल", "scroll down"),
+    ("स्क्रॉल ऊपर", "scroll up"),
+    ("ऊपर स्क्रॉल", "scroll up"),
+    ("खोल दो", "open"),
+    ("खोलो", "open"),
+    ("ओपन", "open"),
+    ("बंद करो", "close"),
+    ("रोक दो", "stop"),
+    ("रुको", "stop"),
+    ("लिखो", "type"),
+    ("टाइप करो", "type"),
+    ("टाइप", "type"),
+    ("सर्च", "search"),
+    ("खोजो", "search"),
+    ("पूछो", "ask"),
+    ("सवाल", "question"),
+    ("नीचे", "down"),
+    ("ऊपर", "up"),
+    ("दायें", "right"),
+    ("दाएं", "right"),
+    ("बायें", "left"),
+    ("बाएं", "left"),
+    ("क्लिक", "click"),
+    ("यूट्यूब", "youtube"),
+    ("क्रोम", "chrome"),
+    ("गूगल", "google"),
+    ("नोटपैड", "notepad"),
+    ("कैलकुलेटर", "calculator"),
+    ("सेटिंग्स", "settings"),
+    ("haan ji", "yes"),
+    ("haan", "yes"),
+    ("nahin", "no"),
+    ("nahi", "no"),
+    ("right click", "right click"),
+    ("left click", "left click"),
+    ("scroll neeche", "scroll down"),
+    ("scroll niche", "scroll down"),
+    ("scroll upar", "scroll up"),
+    ("khol do", "open"),
+    ("band karo", "close"),
+    ("rok do", "stop"),
+    ("likho", "type"),
+    ("type karo", "type"),
+    ("khojo", "search"),
+    ("poocho", "ask"),
+    ("sawal", "question"),
+    ("neeche", "down"),
+    ("niche", "down"),
+    ("upar", "up"),
+    ("daaye", "right"),
+    ("daayen", "right"),
+    ("baaye", "left"),
+    ("baayen", "left"),
+    ("ruko", "stop"),
 )
 
 KEY_ALIASES: dict[str, str] = {
@@ -222,7 +316,7 @@ CONFIRM_HOTKEY_COMBOS: set[tuple[str, ...]] = {
 }
 BLOCKED_HOTKEY_KEYS: set[str] = {"win", "winleft", "winright"}
 CONFIRM_KEYS: set[str] = {"delete"}
-YES_WORDS: set[str] = {"yes", "confirm", "do it", "go ahead", "continue"}
+YES_WORDS: set[str] = {"yes", "confirm", "do it", "go ahead", "continue", "ok", "okay"}
 NO_WORDS: set[str] = {"no", "cancel", "stop", "dont", "don't", "never mind"}
 
 LOCAL_HOTKEY_COMMANDS: tuple[tuple[tuple[str, ...], tuple[str, ...], str, str], ...] = (
@@ -323,11 +417,17 @@ def _extract_json_object(text: str) -> Optional[dict[str, Any]]:
 
 def _clean_voice_text(text: str) -> str:
     text = text.lower().strip()
-    text = re.sub(r"[^a-z0-9:/?&=._+\-\s]", " ", text)
+    text = text.replace("_", " ")
+    text = re.sub(r"[^\w\s:/?&=._+\-]", " ", text, flags=re.UNICODE)
     text = re.sub(r"\s+", " ", text)
     text = text.strip()
     for source, target in VOICE_TEXT_REPLACEMENTS:
-        text = re.sub(rf"\b{re.escape(source)}\b", target, text)
+        text = re.sub(
+            rf"(?<!\w){re.escape(source)}(?!\w)",
+            target,
+            text,
+            flags=re.UNICODE,
+        )
     return text.strip()
 
 
@@ -407,20 +507,46 @@ def _parse_bool_env(value: Optional[str], default: bool) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _parse_language_codes(value: Optional[str], fallback: str) -> list[str]:
+    raw_parts = value.split(",") if value else [fallback]
+    languages: list[str] = []
+    for raw_part in raw_parts:
+        cleaned = raw_part.strip()
+        if cleaned and cleaned not in languages:
+            languages.append(cleaned)
+    if not languages:
+        languages.append(fallback)
+    return languages
+
+
 def _extract_transcript_candidates(result: Any) -> list[str]:
     if isinstance(result, str):
-        return [result]
+        cleaned = result.strip()
+        return [cleaned] if cleaned else []
 
     if isinstance(result, dict):
         alternatives = result.get("alternative", [])
         if isinstance(alternatives, list):
-            transcripts = []
-            for item in alternatives:
-                if isinstance(item, dict):
-                    transcript = item.get("transcript")
-                    if isinstance(transcript, str) and transcript.strip():
-                        transcripts.append(transcript.strip())
-            return transcripts
+            ranked: list[tuple[float, int, str]] = []
+            for index, item in enumerate(alternatives):
+                if not isinstance(item, dict):
+                    continue
+                transcript = item.get("transcript")
+                if not isinstance(transcript, str):
+                    continue
+                cleaned = transcript.strip()
+                if not cleaned:
+                    continue
+                confidence_raw = item.get("confidence", 0.0)
+                try:
+                    confidence = float(confidence_raw)
+                except (TypeError, ValueError):
+                    confidence = 0.0
+                ranked.append((confidence, index, cleaned))
+
+            if ranked:
+                ranked.sort(key=lambda entry: (-entry[0], entry[1]))
+                return [entry[2] for entry in ranked]
 
     return []
 
@@ -455,6 +581,52 @@ def _close_app_by_name(app_name: str) -> bool:
         check=False,
     )
     return True
+
+
+def control_window(action: str) -> bool:
+    """Control the active window directly, with a keyboard fallback."""
+    requested_action = _clean_voice_text(action)
+    if requested_action not in {"minimize", "maximize", "restore"}:
+        return False
+
+    active_window = None
+    if gw is not None:
+        try:
+            active_window = gw.getActiveWindow()
+        except Exception as exc:
+            logger.debug("Unable to access active window via pygetwindow: %s", exc)
+
+    if active_window is not None:
+        try:
+            if requested_action == "minimize":
+                active_window.minimize()
+            elif requested_action == "maximize":
+                active_window.maximize()
+            else:
+                active_window.restore()
+            return True
+        except Exception as exc:
+            logger.debug(
+                "Direct window control failed for '%s': %s",
+                requested_action,
+                exc,
+            )
+
+    # Keyboard fallback when direct window control is unavailable.
+    if requested_action == "minimize":
+        pyautogui.hotkey("win", "down")
+        time.sleep(0.1)
+        pyautogui.hotkey("win", "down")
+        return True
+    if requested_action == "maximize":
+        pyautogui.hotkey("win", "up")
+        return True
+    if requested_action == "restore":
+        pyautogui.hotkey("alt", "space")
+        time.sleep(0.1)
+        pyautogui.press("r")
+        return True
+    return False
 
 
 def _scroll_amount_from_text(text: str) -> int:
@@ -660,6 +832,30 @@ def _plan_single_task_locally(cmd: str) -> Optional[dict[str, Any]]:
             summary="Stop app",
             reply="Stopping the app.",
             steps=[{"action": "stop"}],
+        )
+
+    if "minimize" in text:
+        return _default_plan(
+            decision="allow",
+            summary="Minimize window",
+            reply="Minimizing window.",
+            steps=[{"action": "minimize"}],
+        )
+
+    if "maximize" in text:
+        return _default_plan(
+            decision="allow",
+            summary="Maximize window",
+            reply="Maximizing window.",
+            steps=[{"action": "maximize"}],
+        )
+
+    if "restore" in text:
+        return _default_plan(
+            decision="allow",
+            summary="Restore window",
+            reply="Restoring window.",
+            steps=[{"action": "restore"}],
         )
 
     if "double click" in text:
@@ -980,7 +1176,10 @@ def _normalize_step(step: Any) -> Optional[dict[str, Any]]:
 
     normalized: dict[str, Any] = {"action": action}
 
-    if action == "scroll":
+    if action in {"minimize", "maximize", "restore"}:
+        pass
+
+    elif action == "scroll":
         direction = str(step.get("direction", "down")).strip().lower()
         if direction not in {"up", "down"}:
             direction = "down"
@@ -1199,6 +1398,7 @@ DO NOT:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 - Prefer DIRECT actions (open_url, launch_app)
+- Window control actions available: minimize, maximize, restore
 - NEVER use type_text for search
 - NEVER mix launch_app + type_text for search
 - Keep steps minimal (1-3 steps max)
@@ -1216,7 +1416,10 @@ DO NOT:
         {{ "action": "open_url", "url": "..." }},
         {{ "action": "launch_app", "app": "..." }},
         {{ "action": "press_key", "key": "enter" }},
-        {{ "action": "hotkey", "keys": ["ctrl", "c"] }}
+        {{ "action": "hotkey", "keys": ["ctrl", "c"] }},
+        {{ "action": "minimize" }},
+        {{ "action": "maximize" }},
+        {{ "action": "restore" }}
     ]
 }}
 
@@ -1345,6 +1548,177 @@ User question: {utterance}
         return cleaned[:320]
 
 
+class CloudBrain:
+    """Optional OpenAI-compatible cloud planner and Q&A fallback."""
+
+    def __init__(
+        self,
+        model: str,
+        api_key: str,
+        base_url: str = "https://api.openai.com/v1",
+        timeout_s: float = DEFAULT_CLOUD_TIMEOUT_S,
+    ) -> None:
+        api_key = api_key.strip()
+        if not api_key:
+            raise ValueError("Cloud brain requires a non-empty API key.")
+        self.model = model.strip() or "gpt-4o-mini"
+        self.api_key = api_key
+        self.base_url = base_url.rstrip("/")
+        self.timeout_s = timeout_s
+        self.last_error: str = ""
+
+    def _request_chat(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        temperature: float,
+    ) -> Optional[str]:
+        self.last_error = ""
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+        }
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            url=f"{self.base_url}/chat/completions",
+            data=data,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.api_key}",
+            },
+            method="POST",
+        )
+
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
+                body = resp.read().decode("utf-8", errors="ignore")
+        except urllib.error.HTTPError as exc:
+            detail = ""
+            try:
+                detail = exc.read().decode("utf-8", errors="ignore")
+            except Exception:
+                detail = str(exc)
+            logger.warning("Cloud brain HTTP error: %s", detail or exc)
+            self.last_error = (
+                "The cloud brain rejected the request. Check the API key, "
+                "model name, and endpoint configuration."
+            )
+            return None
+        except urllib.error.URLError as exc:
+            logger.warning("Cloud brain not reachable: %s", exc)
+            self.last_error = (
+                "The cloud brain is not reachable right now. Check the internet "
+                "connection and the configured endpoint."
+            )
+            return None
+        except Exception as exc:
+            logger.warning("Cloud brain request failed: %s", exc)
+            if "timed out" in str(exc).lower():
+                self.last_error = (
+                    "The cloud brain took too long to answer. Try again or "
+                    "increase CLOUD_BRAIN_TIMEOUT."
+                )
+            else:
+                self.last_error = "The cloud brain could not finish that request."
+            return None
+
+        try:
+            parsed = json.loads(body)
+        except json.JSONDecodeError:
+            self.last_error = "The cloud brain returned an unreadable response."
+            return None
+
+        choices = parsed.get("choices", [])
+        if not isinstance(choices, list) or not choices:
+            self.last_error = "The cloud brain returned no answer."
+            return None
+
+        message = choices[0].get("message", {})
+        if not isinstance(message, dict):
+            self.last_error = "The cloud brain returned an invalid answer."
+            return None
+
+        content = message.get("content", "")
+        if not isinstance(content, str) or not content.strip():
+            self.last_error = "The cloud brain returned an empty answer."
+            return None
+        return content.strip()
+
+    def plan(self, utterance: str, drag_mode: bool = False) -> Optional[dict[str, Any]]:
+        system_prompt = """
+You are the cloud fallback planner for a Windows voice-controlled accessibility assistant.
+Convert user voice commands into safe desktop actions.
+
+Rules:
+- Keep actions minimal and safe.
+- Block dangerous requests involving shells, deleting files, security bypasses, or secrets.
+- Use direct actions when possible.
+- Window control actions available: minimize, maximize, restore.
+- For play/search requests, prefer a direct open_url result instead of typing into an app.
+- Return strict JSON only with this schema:
+{
+  "decision": "allow" | "confirm" | "block" | "noop",
+  "summary": "short summary",
+  "reply": "short reply",
+  "steps": [
+    { "action": "open_url", "url": "..." },
+    { "action": "launch_app", "app": "..." },
+    { "action": "press_key", "key": "enter" },
+    { "action": "hotkey", "keys": ["ctrl", "c"] },
+    { "action": "minimize" },
+    { "action": "maximize" },
+    { "action": "restore" }
+  ]
+}
+""".strip()
+        user_prompt = (
+            f"User request: {utterance}\n"
+            f"Drag mode active: {'yes' if drag_mode else 'no'}"
+        )
+
+        response_text = self._request_chat(
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.0,
+        )
+        if not response_text:
+            return None
+
+        plan = _extract_json_object(response_text)
+        if plan:
+            return plan
+
+        self.last_error = "The cloud brain returned an invalid plan."
+        return None
+
+    def answer_question(self, utterance: str) -> Optional[str]:
+        response_text = self._request_chat(
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a helpful accessibility voice assistant. "
+                        "Answer in plain English, short and clear, in 1 or 2 sentences."
+                    ),
+                },
+                {"role": "user", "content": utterance},
+            ],
+            temperature=0.2,
+        )
+        if not response_text:
+            return None
+
+        cleaned = response_text.strip().replace("\n", " ")
+        cleaned = re.sub(r"\s+", " ", cleaned)
+        if not cleaned:
+            self.last_error = "The cloud brain returned an empty answer."
+            return None
+        return cleaned[:320]
+
+
 def _looks_like_question(text: str) -> bool:
     """Heuristic to route general knowledge questions to the local brain."""
     cleaned = _clean_voice_text(text)
@@ -1423,6 +1797,7 @@ def _answer_project_faq(text: str) -> Optional[str]:
 def plan_task(
     cmd: str,
     brain: Optional[OllamaBrain],
+    cloud_brain: Optional[CloudBrain] = None,
     drag_mode: bool = False,
 ) -> dict[str, Any]:
     """Plan a free-form command via the local brain."""
@@ -1436,23 +1811,34 @@ def plan_task(
         )
         return local_plan
 
-    if brain is None:
+    if brain is None and cloud_brain is None:
         return _default_plan(
             reply=(
                 "I didn't understand that in rule mode. Try a simpler command like "
-                "open chrome or type hello, or start Ollama for more natural requests."
+                "open chrome or type hello, or enable Ollama or a cloud brain "
+                "for more natural requests."
             )
         )
 
-    raw_plan = brain.plan(normalized_cmd or cmd, drag_mode=drag_mode)
-    if not raw_plan:
-        return _default_plan(
-            reply=brain.last_error
-            or "I heard you, but I could not understand that request safely."
-        )
+    last_error = ""
 
-    logger.debug("Using Ollama voice plan for '%s'", normalized_cmd or cmd)
-    return _normalize_plan(raw_plan)
+    if brain is not None:
+        raw_plan = brain.plan(normalized_cmd or cmd, drag_mode=drag_mode)
+        if raw_plan:
+            logger.debug("Using Ollama voice plan for '%s'", normalized_cmd or cmd)
+            return _normalize_plan(raw_plan)
+        last_error = brain.last_error
+
+    if cloud_brain is not None:
+        raw_plan = cloud_brain.plan(normalized_cmd or cmd, drag_mode=drag_mode)
+        if raw_plan:
+            logger.debug("Using cloud voice plan for '%s'", normalized_cmd or cmd)
+            return _normalize_plan(raw_plan)
+        last_error = cloud_brain.last_error or last_error
+
+    return _default_plan(
+        reply=last_error or "I heard you, but I could not understand that request safely."
+    )
 
 
 try:
@@ -1625,9 +2011,60 @@ class VoiceController:
         self.mic_name: Optional[str] = None
         self.debug_raw = debug_raw_recognition
         self.wake_word = _clean_voice_text(wake_word) or DEFAULT_WAKE_WORD
-        self.language = os.environ.get("VOICE_LANGUAGE", "en-IN").strip() or "en-IN"
+        configured_language = os.environ.get("VOICE_LANGUAGE", "en-IN").strip() or "en-IN"
+        self.languages = _parse_language_codes(
+            os.environ.get("VOICE_LANGUAGES"),
+            configured_language,
+        )
+        self.language = self.languages[0]
+        self.last_language = self.language
         self.command_window_s = max(2.0, float(command_window_s))
         self.acknowledge_wake = acknowledge_wake
+        self.conversation_mode_enabled = _parse_bool_env(
+            os.environ.get("VOICE_CONVERSATION_MODE"),
+            True,
+        )
+        self.conversation_timeout_s = _clamp_float(
+            os.environ.get(
+                "VOICE_CONVERSATION_TIMEOUT_S",
+                DEFAULT_CONVERSATION_TIMEOUT_S,
+            ),
+            default=DEFAULT_CONVERSATION_TIMEOUT_S,
+            minimum=3.0,
+            maximum=30.0,
+        )
+        self.far_field_mode = _parse_bool_env(
+            os.environ.get("VOICE_FAR_FIELD_MODE"),
+            True,
+        )
+        self.noise_reduction_enabled = _parse_bool_env(
+            os.environ.get("VOICE_NOISE_REDUCTION"),
+            self.far_field_mode,
+        )
+        self.audio_target_rms = _clamp_float(
+            os.environ.get(
+                "VOICE_TARGET_RMS",
+                DEFAULT_AUDIO_TARGET_RMS if self.far_field_mode else 0.0,
+            ),
+            default=DEFAULT_AUDIO_TARGET_RMS,
+            minimum=0.0,
+            maximum=0.35,
+        )
+        self.audio_max_gain = _clamp_float(
+            os.environ.get("VOICE_MAX_GAIN", DEFAULT_AUDIO_MAX_GAIN),
+            default=DEFAULT_AUDIO_MAX_GAIN,
+            minimum=1.0,
+            maximum=8.0,
+        )
+        self.noise_gate_level = _clamp_float(
+            os.environ.get(
+                "VOICE_NOISE_GATE_LEVEL",
+                DEFAULT_NOISE_GATE_LEVEL if self.far_field_mode else 0.0,
+            ),
+            default=DEFAULT_NOISE_GATE_LEVEL,
+            minimum=0.0,
+            maximum=0.08,
+        )
         self.wake_word_aliases = {"ashoo", "ashuu"} if self.wake_word == "ashu" else set()
         self.wake_word_aliases.update(_parse_phrase_list(os.environ.get("WAKE_WORD_ALIASES")))
         self.wake_word_match_ratio = _clamp_float(
@@ -1695,6 +2132,24 @@ class VoiceController:
             os.environ.get("VOICE_MIC_ENABLED"),
             True,
         )
+        self.ambient_refresh_s = _clamp_float(
+            os.environ.get(
+                "VOICE_AMBIENT_REFRESH_S",
+                DEFAULT_AMBIENT_REFRESH_S,
+            ),
+            default=DEFAULT_AMBIENT_REFRESH_S,
+            minimum=0.0,
+            maximum=300.0,
+        )
+        self.ambient_sample_s = _clamp_float(
+            os.environ.get(
+                "VOICE_AMBIENT_SAMPLE_S",
+                DEFAULT_AMBIENT_SAMPLE_S,
+            ),
+            default=DEFAULT_AMBIENT_SAMPLE_S,
+            minimum=0.15,
+            maximum=2.0,
+        )
 
         available_names = list_microphone_names()
         if self.mic_index is None:
@@ -1721,19 +2176,34 @@ class VoiceController:
         self.last_matched: str = ""
         self.last_heard_time: float = 0.0
         self.awaiting_command_until: float = 0.0
+        self.conversation_active_until: float = 0.0
         self._last_wake_time: float = 0.0
         self._last_feedback_time: float = 0.0
         self._awaiting_feedback_sent = False
+        self._audio_preprocess_enabled = bool(
+            self.noise_reduction_enabled or self.audio_target_rms > 0.0 or self.noise_gate_level > 0.0
+        )
         self._state_lock = threading.Lock()
         self._mic_cycle_pause_until: float = 0.0
         self._mic_cycle_deadline: float = 0.0
+        self._next_ambient_refresh_at: float = 0.0
 
         if self.mic_enabled and self.auto_mic_cycle:
             self._mic_cycle_deadline = time.time() + self.mic_listen_window_s
+        if self.ambient_refresh_s > 0.0:
+            self._next_ambient_refresh_at = time.time() + self.ambient_refresh_s
+
+        if self._audio_preprocess_enabled and np is None:
+            logger.warning("NumPy is unavailable; voice audio preprocessing is disabled.")
+        elif self.noise_reduction_enabled and nr is None:
+            logger.info(
+                "Optional noisereduce package not found; using normalization and "
+                "noise gate only for far-field speech enhancement."
+            )
 
         self.recognizer.energy_threshold = energy_threshold
         self.recognizer.dynamic_energy_threshold = True
-        self.recognizer.dynamic_energy_adjustment_damping = 0.2
+        self.recognizer.dynamic_energy_adjustment_damping = 0.15
         self.recognizer.dynamic_energy_adjustment_ratio = 1.5
         self.recognizer.pause_threshold = pause_threshold
         self.recognizer.phrase_threshold = phrase_threshold
@@ -1750,17 +2220,25 @@ class VoiceController:
                 )
             logger.info("Microphone calibrated.")
             logger.info(
-                "Voice recognizer ready (device_index=%s, device_name=%s, language=%s, energy_threshold=%.2f, wake_phrase_limit=%.2fs, command_phrase_limit=%.2fs)",
+                "Voice recognizer ready (device_index=%s, device_name=%s, languages=%s, energy_threshold=%.2f, wake_phrase_limit=%.2fs, command_phrase_limit=%.2fs, conversation_mode=%s)",
                 self.mic_index,
                 self.mic_name or "default",
-                self.language,
+                ",".join(self.languages),
                 self.recognizer.energy_threshold,
                 self.wake_phrase_limit_s,
                 self.command_phrase_limit_s,
+                self.conversation_mode_enabled,
             )
             print("[Voice] Microphone ready.")
             print(f"[Voice] Wake word: '{self.wake_word}'")
-            print(f"[Voice] Language: '{self.language}'")
+            print(f"[Voice] Languages: '{', '.join(self.languages)}'")
+            if self.conversation_mode_enabled:
+                print(
+                    "[Voice] Conversation mode: "
+                    f"{self.conversation_timeout_s:.0f}s follow-up window"
+                )
+            if self._audio_preprocess_enabled:
+                print("[Voice] Far-field enhancement: enabled")
         except Exception as exc:
             self.last_error = str(exc)
             logger.error("Microphone calibration failed: %s", exc)
@@ -1783,6 +2261,7 @@ class VoiceController:
                 self._mic_cycle_pause_until = 0.0
                 self._mic_cycle_deadline = 0.0
                 self.awaiting_command_until = 0.0
+                self.conversation_active_until = 0.0
                 self.last_matched = ""
 
     def set_auto_mic_cycle(self, enabled: bool) -> None:
@@ -1793,6 +2272,185 @@ class VoiceController:
             else:
                 self._mic_cycle_pause_until = 0.0
                 self._mic_cycle_deadline = 0.0
+
+    def _expire_conversation_window(self, now: Optional[float] = None) -> None:
+        current_time = time.time() if now is None else now
+        if self.conversation_active_until and current_time >= self.conversation_active_until:
+            self.conversation_active_until = 0.0
+
+    def _conversation_is_active(self, now: Optional[float] = None) -> bool:
+        current_time = time.time() if now is None else now
+        self._expire_conversation_window(current_time)
+        return (
+            self.conversation_mode_enabled
+            and self.conversation_active_until > 0.0
+            and current_time < self.conversation_active_until
+        )
+
+    def _activate_conversation_window(self, now: float) -> None:
+        if not self.conversation_mode_enabled:
+            return
+        self.conversation_active_until = now + self.conversation_timeout_s
+
+    def _allows_follow_up_without_wake_word(self, now: Optional[float] = None) -> bool:
+        current_time = time.time() if now is None else now
+        self._expire_conversation_window(current_time)
+        return (
+            current_time < self.awaiting_command_until
+            or self._conversation_is_active(current_time)
+        )
+
+    def _maybe_refresh_ambient_noise(self, now: float) -> None:
+        if self.ambient_refresh_s <= 0.0 or now < self._next_ambient_refresh_at:
+            return
+
+        self._next_ambient_refresh_at = now + self.ambient_refresh_s
+        if self._allows_follow_up_without_wake_word(now):
+            return
+
+        try:
+            with self.mic as source:
+                self.recognizer.adjust_for_ambient_noise(
+                    source,
+                    duration=self.ambient_sample_s,
+                )
+            logger.debug(
+                "Ambient profile refreshed (sample=%.2fs, energy=%.2f)",
+                self.ambient_sample_s,
+                self.recognizer.energy_threshold,
+            )
+        except Exception as exc:
+            logger.debug("Ambient refresh skipped: %s", exc)
+
+    def _ordered_languages(self) -> list[str]:
+        ordered: list[str] = []
+        if self.last_language:
+            ordered.append(self.last_language)
+        for language in self.languages:
+            if language not in ordered:
+                ordered.append(language)
+        return ordered or [self.language]
+
+    def _preprocess_audio(self, audio: "sr.AudioData") -> "sr.AudioData":
+        if not self._audio_preprocess_enabled or np is None:
+            return audio
+
+        try:
+            raw = audio.get_raw_data(convert_width=2)
+        except Exception:
+            return audio
+
+        samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32)
+        if samples.size == 0:
+            return audio
+
+        samples /= 32768.0
+        audio_duration_s = samples.size / max(float(audio.sample_rate), 1.0)
+        initial_rms = float(np.sqrt(np.mean(np.square(samples))))
+
+        if self.noise_gate_level > 0.0:
+            quiet_mask = np.abs(samples) < self.noise_gate_level
+            if np.any(quiet_mask):
+                samples[quiet_mask] *= 0.20
+
+        if self.audio_target_rms > 0.0:
+            rms = float(np.sqrt(np.mean(np.square(samples))))
+            if rms > 1e-4:
+                gain = min(self.audio_max_gain, self.audio_target_rms / rms)
+                if gain > 1.0:
+                    samples *= gain
+
+        if self.noise_reduction_enabled and nr is not None:
+            should_reduce_noise = (
+                audio_duration_s >= DEFAULT_MIN_NR_AUDIO_S
+                and (
+                    self.audio_target_rms <= 0.0
+                    or initial_rms
+                    <= (self.audio_target_rms * DEFAULT_NR_SKIP_RMS_FACTOR)
+                )
+            )
+            if should_reduce_noise:
+                try:
+                    samples = nr.reduce_noise(
+                        y=samples,
+                        sr=audio.sample_rate,
+                        stationary=True,
+                        prop_decrease=0.75,
+                    )
+                except Exception as exc:
+                    logger.debug("Noise reduction skipped after processing error: %s", exc)
+
+        samples = np.clip(samples, -1.0, 1.0)
+        processed = (samples * 32767.0).astype(np.int16)
+        return sr.AudioData(processed.tobytes(), audio.sample_rate, 2)
+
+    def _is_actionable_transcript(self, text: str, now: float) -> bool:
+        cleaned = _clean_voice_text(text)
+        if not cleaned:
+            return False
+        if self._allows_follow_up_without_wake_word(now):
+            return True
+        return self._extract_after_wake_word(cleaned)[0]
+
+    def _recognize_audio(
+        self,
+        audio: "sr.AudioData",
+        now: float,
+    ) -> tuple[str, str, list[str]]:
+        best_result: Optional[tuple[str, str, list[str]]] = None
+        request_error: Optional[Exception] = None
+
+        for language in self._ordered_languages():
+            try:
+                recognition = self.recognizer.recognize_google(
+                    audio,
+                    language=language,
+                    show_all=True,
+                )
+                transcripts = _extract_transcript_candidates(recognition)
+                raw_text = ""
+                if transcripts:
+                    raw_text = self._pick_transcript_candidate(transcripts, now=now)
+                elif isinstance(recognition, str):
+                    raw_text = recognition
+                elif isinstance(recognition, dict):
+                    alternatives = recognition.get("alternative", [])
+                    if isinstance(alternatives, list):
+                        for item in alternatives:
+                            if not isinstance(item, dict):
+                                continue
+                            candidate = item.get("transcript")
+                            if isinstance(candidate, str) and candidate.strip():
+                                raw_text = candidate.strip()
+                                break
+
+                if not raw_text:
+                    raw_text = self.recognizer.recognize_google(
+                        audio,
+                        language=language,
+                    )
+            except sr.UnknownValueError:
+                continue
+            except sr.RequestError as exc:
+                request_error = exc
+                break
+
+            cleaned = _clean_voice_text(raw_text)
+            if not cleaned:
+                continue
+
+            result = (language, raw_text, transcripts)
+            if best_result is None or len(cleaned) > len(_clean_voice_text(best_result[1])):
+                best_result = result
+
+            if self._is_actionable_transcript(cleaned, now):
+                return result
+
+        if best_result is not None:
+            return best_result
+        if request_error is not None:
+            raise request_error
+        raise sr.UnknownValueError()
 
     def _token_matches_wake_word(self, token: str, allow_fuzzy: bool = True) -> bool:
         candidate = _clean_voice_text(token)
@@ -1851,7 +2509,11 @@ class VoiceController:
             self._awaiting_feedback_sent = True
         self.last_matched = ""
 
-    def _pick_transcript_candidate(self, transcripts: list[str]) -> str:
+    def _pick_transcript_candidate(
+        self,
+        transcripts: list[str],
+        now: Optional[float] = None,
+    ) -> str:
         cleaned_candidates: list[str] = []
         for transcript in transcripts:
             cleaned = _clean_voice_text(transcript)
@@ -1861,18 +2523,79 @@ class VoiceController:
         if not cleaned_candidates:
             return ""
 
-        if time.time() < self.awaiting_command_until:
-            return max(cleaned_candidates, key=len)
+        current_time = time.time() if now is None else now
+        allow_follow_up = self._allows_follow_up_without_wake_word(current_time)
+        action_tokens = {
+            "open",
+            "search",
+            "scroll",
+            "type",
+            "press",
+            "click",
+            "double",
+            "left",
+            "right",
+            "minimize",
+            "maximize",
+            "restore",
+            "stop",
+            "confirm",
+            "cancel",
+            "copy",
+            "paste",
+            "undo",
+            "redo",
+            "ask",
+            "question",
+            "help",
+            "close",
+        }
 
-        wake_candidates = [
-            candidate
-            for candidate in cleaned_candidates
-            if self._extract_after_wake_word(candidate)[0]
-        ]
-        if wake_candidates:
-            return max(wake_candidates, key=len)
+        best_candidate = cleaned_candidates[0]
+        best_score = float("-inf")
 
-        return cleaned_candidates[0]
+        for index, candidate in enumerate(cleaned_candidates):
+            has_wake_word, remainder = self._extract_after_wake_word(candidate)
+            command_text = remainder if has_wake_word and remainder else candidate
+            tokens = command_text.split()
+            first_token = tokens[0] if tokens else ""
+            token_count = len(tokens)
+
+            score = 0.0
+            if has_wake_word:
+                score += 3.0
+            elif not allow_follow_up:
+                score -= 0.9
+
+            if first_token in action_tokens:
+                score += 1.0
+            if any(
+                command_text.startswith(prefix)
+                for prefix in (
+                    "open ",
+                    "search ",
+                    "scroll ",
+                    "type ",
+                    "press ",
+                    "ask ",
+                    "question ",
+                )
+            ):
+                score += 0.5
+
+            if 1 <= token_count <= 12:
+                score += 0.4
+            elif token_count > 16:
+                score -= 0.4
+
+            score += min(len(command_text), 48) / 160.0
+            score -= index * 0.18
+
+            if score > best_score:
+                best_score = score
+                best_candidate = candidate
+
+        return best_candidate
 
     def _consume_transcript(self, text: str, now: float) -> Optional[str]:
         cleaned = _clean_voice_text(text)
@@ -1880,19 +2603,45 @@ class VoiceController:
             return None
 
         self._expire_command_window(now)
+        self._expire_conversation_window(now)
+        has_wake_word, remainder = self._extract_after_wake_word(cleaned)
 
-        if now < self.awaiting_command_until:
+        if self._conversation_is_active(now):
+            if has_wake_word:
+                if remainder:
+                    self.last_matched = remainder
+                    self._activate_conversation_window(now)
+                    return remainder
+                self.last_matched = self.wake_word
+                self._activate_conversation_window(now)
+                return None
+
             self.awaiting_command_until = 0.0
             self._awaiting_feedback_sent = False
             self.last_matched = cleaned
+            self._activate_conversation_window(now)
             return cleaned
 
-        has_wake_word, remainder = self._extract_after_wake_word(cleaned)
+        if now < self.awaiting_command_until:
+            if has_wake_word:
+                if remainder:
+                    cleaned = remainder
+                else:
+                    self.last_matched = self.wake_word
+                    self.awaiting_command_until = now + self.command_window_s
+                    return None
+            self.awaiting_command_until = 0.0
+            self._awaiting_feedback_sent = False
+            self.last_matched = cleaned
+            self._activate_conversation_window(now)
+            return cleaned
+
         if not has_wake_word:
             return None
 
         if remainder:
             self.last_matched = remainder
+            self._activate_conversation_window(now)
             return remainder
 
         if now - self._last_wake_time < self.wake_word_cooldown_s:
@@ -1925,6 +2674,7 @@ class VoiceController:
                     if not mic_enabled:
                         self.listening = False
                         self.awaiting_command_until = 0.0
+                        self.conversation_active_until = 0.0
                         self.last_matched = ""
 
                     elif auto_mic_cycle:
@@ -1935,6 +2685,7 @@ class VoiceController:
                         if now >= cycle_deadline:
                             self.listening = False
                             self.awaiting_command_until = 0.0
+                            self.conversation_active_until = 0.0
                             self.last_matched = ""
                             if cycle_pause_until <= 0.0:
                                 self._mic_cycle_pause_until = now + self.mic_cycle_pause_s
@@ -1951,11 +2702,13 @@ class VoiceController:
                     time.sleep(min(0.1, max(0.01, cycle_pause_until - now)))
                     continue
 
+                self._maybe_refresh_ambient_noise(now)
                 self._expire_command_window()
+                self._expire_conversation_window()
                 self.listening = True
                 phrase_time_limit = (
                     self.command_phrase_limit_s
-                    if time.time() < self.awaiting_command_until
+                    if self._allows_follow_up_without_wake_word(time.time())
                     else self.wake_phrase_limit_s
                 )
                 with self.mic as source:
@@ -1966,20 +2719,23 @@ class VoiceController:
                     )
                 self.listening = False
                 transcripts: list[str] = []
+                language_used = self.last_language
+                recognition_now = time.time()
+                audio_for_recognition = self._preprocess_audio(audio)
                 try:
-                    recognition = self.recognizer.recognize_google(
-                        audio,
-                        language=self.language,
-                        show_all=True,
-                    )
-                    transcripts = _extract_transcript_candidates(recognition)
-                    if transcripts:
-                        raw_text = self._pick_transcript_candidate(transcripts)
-                    else:
-                        raw_text = self.recognizer.recognize_google(
-                            audio,
-                            language=self.language,
+                    try:
+                        language_used, raw_text, transcripts = self._recognize_audio(
+                            audio_for_recognition,
+                            recognition_now,
                         )
+                    except sr.UnknownValueError:
+                        if audio_for_recognition is audio:
+                            raise
+                        language_used, raw_text, transcripts = self._recognize_audio(
+                            audio,
+                            recognition_now,
+                        )
+                    self.last_language = language_used
                     self.last_error = ""
                 except sr.UnknownValueError:
                     if self.debug_raw:
@@ -2033,14 +2789,20 @@ class VoiceController:
     def get_status_text(self) -> str:
         """Short device or wake-word summary for logs or HUD."""
         self._expire_command_window()
+        self._expire_conversation_window()
         if self.last_error:
             return self.last_error
         if not self.mic_enabled:
             return "Mic: off"
-        if self.auto_mic_cycle:
-            return f"Mic: auto {self.mic_listen_window_s:.0f}s"
+        if self._conversation_is_active():
+            remaining = max(0.0, self.conversation_active_until - time.time())
+            return f"Talk: follow-up {remaining:.0f}s"
         if time.time() < self.awaiting_command_until:
             return f"Wake: waiting ({self.wake_word})"
+        if self.auto_mic_cycle:
+            return f"Mic: auto {self.mic_listen_window_s:.0f}s"
+        if len(self.languages) > 1:
+            return f"Wake: {self.wake_word} ({self.last_language})"
         return f"Wake: say {self.wake_word}"
 
     def stop(self) -> None:
@@ -2080,11 +2842,13 @@ class VoiceCommandProcessor:
         assistant: Optional[AssistantVoice],
         voice: Optional[VoiceController],
         brain: Optional[OllamaBrain],
+        cloud_brain: Optional[CloudBrain] = None,
         confirmation_timeout_s: float = DEFAULT_CONFIRM_WINDOW_S,
     ) -> None:
         self.assistant = assistant
         self.voice = voice
         self.brain = brain
+        self.cloud_brain = cloud_brain
         self.confirmation_timeout_s = max(5.0, float(confirmation_timeout_s))
         self.drag_mode = False
         self.pending_plan: Optional[PendingVoicePlan] = None
@@ -2179,6 +2943,12 @@ class VoiceCommandProcessor:
             return f"Pressing {first_step.get('key', 'that key')}."
         if action == "hotkey":
             return f"Using {self._describe_hotkey(first_step.get('keys', []))}."
+        if action == "minimize":
+            return "Minimizing the current window."
+        if action == "maximize":
+            return "Maximizing the current window."
+        if action == "restore":
+            return "Restoring the current window."
         if action == "scroll":
             direction = first_step.get("direction", "down")
             return f"Scrolling {direction}."
@@ -2219,6 +2989,12 @@ class VoiceCommandProcessor:
             return "I couldn't use that shortcut."
         if action == "press_key":
             return "I couldn't press that key."
+        if action == "minimize":
+            return "I couldn't minimize that window."
+        if action == "maximize":
+            return "I couldn't maximize that window."
+        if action == "restore":
+            return "I couldn't restore that window."
         return "That action failed. Please try again."
 
     def _no_match_reply(self, reply: str) -> str:
@@ -2378,6 +3154,10 @@ class VoiceCommandProcessor:
                 elif action == "double_click":
                     pyautogui.doubleClick()
 
+                elif action in {"minimize", "maximize", "restore"}:
+                    if not control_window(action):
+                        raise RuntimeError(f"Window control action failed: {action}")
+
                 elif action == "scroll":
                     amount = int(step.get("amount", 300))
                     direction = step.get("direction", "down")
@@ -2494,7 +3274,12 @@ class VoiceCommandProcessor:
             self.pending_plan = None
             self.last_status = "Pending cleared"
 
-        plan = plan_task(text, self.brain, drag_mode=self.drag_mode)
+        plan = plan_task(
+            text,
+            self.brain,
+            cloud_brain=self.cloud_brain,
+            drag_mode=self.drag_mode,
+        )
         decision, reply = self._assess_security(text, plan)
         logger.debug("Voice decision for '%s': %s | %s", text, decision, plan)
 
@@ -2510,12 +3295,11 @@ class VoiceCommandProcessor:
                 self._speak(self._question_thinking_reply())
                 question_text = _strip_chat_prefix(text) or text
 
-                answer = None
-                if self.brain:
+                answer = _answer_project_faq(question_text)
+                if not answer and self.brain:
                     answer = self.brain.answer_question(question_text)
-
-                if not answer:
-                    answer = _answer_project_faq(question_text)
+                if not answer and self.cloud_brain:
+                    answer = self.cloud_brain.answer_question(question_text)
 
                 if answer:
                     self.last_status = "Answered"
@@ -2525,12 +3309,14 @@ class VoiceCommandProcessor:
 
                 self.last_status = "Answer failed"
                 logger.info("Chat assistant did not return an answer for: '%s'", question_text)
-                if self.brain and self.brain.last_error:
+                if self.cloud_brain and self.cloud_brain.last_error:
+                    self._speak(self.cloud_brain.last_error)
+                elif self.brain and self.brain.last_error:
                     self._speak(self.brain.last_error)
                 else:
                     self._speak(
                         "I can answer questions about Blink-Click Virtual Mouse. "
-                        "For broader questions, start Ollama with ollama serve."
+                        "For broader questions, enable Ollama or the cloud brain."
                     )
                 return False
 
