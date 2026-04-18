@@ -24,6 +24,7 @@ from typing import Optional
 import pyautogui
 
 # ── Project modules ──────────────────────────────────────────────
+from hand_controller import HandGestureController
 from mouse_controller import (
     BlinkDetector,
     CameraCapture,
@@ -78,6 +79,8 @@ def _print_banner(
     brain: Optional[OllamaBrain],
     cloud_brain: Optional[CloudBrain],
     cfg: MouseConfig,
+    control_mode: str,
+    hand_available: bool,
 ) -> None:
     print("\n" + "═" * 62)
     print("   BLINK-CLICK VIRTUAL MOUSE  –  Accessibility Edition")
@@ -110,8 +113,15 @@ def _print_banner(
         print("  Mic Ctrl   : Click MIC button in window or press M")
     else:
         print("  Mic Ctrl   : Unavailable (voice input disabled)")
-    print( "  Cursor     : Head tracking (nose position)")
-    print(f"  Blink Click: EAR threshold {cfg.blink_threshold}")
+    hotkey_hint = " (H=hand, F=head)" if hand_available else ""
+    print(f"  Control    : {control_mode.upper()}{hotkey_hint}")
+    print("  Head Mode  : Nose cursor + blink click")
+    if hand_available:
+        print(
+            "  Hand Mode  : Index move, pinch left click, 2-finger scroll, "
+            "3-finger right click, open palm pause"
+        )
+    print(f"  Blink Click: EAR threshold {cfg.blink_threshold} (head mode)")
     print(f"  Click Cool : {cfg.click_cooldown_s:.2f}s")
     print( "  Press ESC to exit")
     print("═" * 62 + "\n")
@@ -158,6 +168,36 @@ def _apply_mouse_runtime_overrides(cfg: MouseConfig) -> None:
         cfg.blink_release_margin,
     )
     cfg.click_cooldown_s = _env_float("CLICK_COOLDOWN_S", cfg.click_cooldown_s)
+    cfg.hand_pinch_threshold_px = _env_int(
+        "HAND_PINCH_THRESHOLD_PX",
+        cfg.hand_pinch_threshold_px,
+    )
+    cfg.hand_right_click_threshold_px = _env_int(
+        "HAND_RIGHT_CLICK_THRESHOLD_PX",
+        cfg.hand_right_click_threshold_px,
+    )
+    cfg.hand_gesture_confirm_frames = _env_int(
+        "HAND_GESTURE_CONFIRM_FRAMES",
+        cfg.hand_gesture_confirm_frames,
+    )
+    cfg.hand_click_cooldown_s = _env_float(
+        "HAND_CLICK_COOLDOWN_S",
+        cfg.hand_click_cooldown_s,
+    )
+    cfg.hand_scroll_unit = _env_int("HAND_SCROLL_UNIT", cfg.hand_scroll_unit)
+
+
+def _resolve_control_mode(hand_available: bool) -> str:
+    requested = os.environ.get("CONTROL_MODE", "head").strip().lower()
+    if requested in {"face", "eye"}:
+        requested = "head"
+    if requested not in {"head", "hand"}:
+        logger.warning("Invalid CONTROL_MODE '%s'; defaulting to head.", requested)
+        requested = "head"
+    if requested == "hand" and not hand_available:
+        logger.warning("CONTROL_MODE=hand requested but hand tracking is unavailable.")
+        return "head"
+    return requested
 
 
 def _draw_stop_button(frame, hover: bool) -> tuple[int, int, int, int]:
@@ -271,6 +311,13 @@ def main() -> None:
     # ── MediaPipe Face Mesh ──────────────────────────────────────
     face_mesh = FaceMeshProcessor(cfg)
 
+    hand_controller: Optional[HandGestureController] = None
+    try:
+        hand_controller = HandGestureController(cfg)
+        logger.info("Hand gesture controller initialised.")
+    except Exception as exc:
+        logger.warning("Hand gesture controller unavailable: %s", exc)
+
     # ── Head Tracker ─────────────────────────────────────────────
     tracker = HeadTracker(cfg)
 
@@ -290,6 +337,11 @@ def main() -> None:
     drag_mode = False
     blink_feedback_until: float = 0.0
     blink_feedback_text: str = ""
+    control_mode = _resolve_control_mode(hand_available=hand_controller is not None)
+    if control_mode == "hand" and hand_controller:
+        hand_controller.sync_to_cursor()
+    else:
+        tracker.sync_to_cursor()
 
     # ── Rest reminder ────────────────────────────────────────────
     session_start = time.time()
@@ -395,7 +447,15 @@ def main() -> None:
         logger.warning("Voice input disabled because SpeechRecognition is unavailable.")
 
     # ── Banner ───────────────────────────────────────────────────
-    _print_banner(assistant, voice, brain, cloud_brain, cfg)
+    _print_banner(
+        assistant,
+        voice,
+        brain,
+        cloud_brain,
+        cfg,
+        control_mode,
+        hand_available=hand_controller is not None,
+    )
 
     stop_button_state = {
         "rect": (0, 0, 0, 0),
@@ -426,6 +486,33 @@ def main() -> None:
                 "[Voice] Microphone control unavailable because voice input "
                 "is disabled."
             )
+
+    def _set_control_mode(next_mode: str, source: str) -> None:
+        nonlocal control_mode
+
+        next_mode = next_mode.strip().lower()
+        if next_mode == "hand" and not hand_controller:
+            logger.info(
+                "Hand mode requested by %s but hand tracking is unavailable.",
+                source,
+            )
+            print("[Control] Hand mode is unavailable in this environment.")
+            if assistant:
+                assistant.say("Hand mode is unavailable")
+            return
+        if next_mode not in {"head", "hand"} or next_mode == control_mode:
+            return
+
+        control_mode = next_mode
+        if control_mode == "hand" and hand_controller:
+            hand_controller.sync_to_cursor()
+        else:
+            tracker.sync_to_cursor()
+
+        logger.info("Control mode switched to %s by %s.", control_mode, source)
+        print(f"[Control] Switched to {control_mode.upper()} mode ({source})")
+        if assistant:
+            assistant.say(f"{control_mode} mode")
 
     def _on_window_mouse(event, x, y, flags, param) -> None:
         _ = (flags, param)
@@ -466,7 +553,41 @@ def main() -> None:
             now = time.time()
 
             # ── Face mesh processing ─────────────────────────────
-            lm = face_mesh.process(processing_frame)
+            if control_mode == "hand" and hand_controller:
+                hand_result = hand_controller.process(processing_frame, now)
+                hand_controller.draw(frame, hand_result)
+
+                if hand_result.hand_detected:
+                    if (
+                        not hand_result.pause
+                        and hand_result.cursor_x is not None
+                        and hand_result.cursor_y is not None
+                    ):
+                        pyautogui.moveTo(
+                            hand_result.cursor_x,
+                            hand_result.cursor_y,
+                            _pause=False,
+                        )
+
+                    if hand_result.click == "left":
+                        pyautogui.click()
+                        blink_feedback_text = "LEFT CLICK"
+                        blink_feedback_until = now + cfg.click_feedback_duration
+                        if assistant:
+                            assistant.say("Click")
+                    elif hand_result.click == "right":
+                        pyautogui.rightClick()
+                        blink_feedback_text = "RIGHT CLICK"
+                        blink_feedback_until = now + cfg.click_feedback_duration
+                        if assistant:
+                            assistant.say("Right click")
+
+                    if hand_result.scroll_amount:
+                        pyautogui.scroll(hand_result.scroll_amount)
+                else:
+                    hand_controller.draw_no_hand_warning(frame, w, h)
+
+            lm = face_mesh.process(processing_frame) if control_mode == "head" else None
 
             if lm is not None:
                 # ── HEAD CURSOR ──────────────────────────────────
@@ -520,7 +641,8 @@ def main() -> None:
                     draw_ear_bar(frame, avg_ear, cfg.blink_threshold)
 
             else:
-                draw_no_face_warning(frame, w, h)
+                if control_mode == "head":
+                    draw_no_face_warning(frame, w, h)
 
             # ── VOICE COMMANDS ───────────────────────────────────
             if voice and voice_processor:
@@ -545,7 +667,12 @@ def main() -> None:
 
             # ── STATUS PANEL ─────────────────────────────────────
             status_lines = [
-                f"Face  : {face_mesh.mode.upper()}",
+                f"Ctrl  : {control_mode.upper()}",
+                (
+                    f"Face  : {face_mesh.mode.upper()}"
+                    if control_mode == "head"
+                    else "Hand  : MEDIAPIPE"
+                ),
                 f"Voice : {'ON  (wake)' if voice else 'OFF'}",
                 (
                     "Brain : OLLAMA+CLOUD"
@@ -609,6 +736,14 @@ def main() -> None:
                 _toggle_microphone("hotkey: M")
                 continue
 
+            if key in (ord("h"), ord("H")):
+                _set_control_mode("hand", "hotkey: H")
+                continue
+
+            if key in (ord("f"), ord("F")):
+                _set_control_mode("head", "hotkey: F")
+                continue
+
             if key == 27:
                 if now <= exit_armed_until:
                     logger.info("Escape pressed twice. Exiting application.")
@@ -639,6 +774,8 @@ def main() -> None:
         voice.stop()
     if assistant:
         assistant.stop()
+    if hand_controller:
+        hand_controller.close()
     cam.release()
     cv2.destroyAllWindows()
     print("\nProgram closed. Goodbye!")

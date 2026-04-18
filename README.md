@@ -35,12 +35,14 @@
 | **Ollama (phi3)** | Local intent planning from natural speech |
 | **pyttsx3** | Text-to-Speech for spoken feedback |
 
-The system is split into **two core modules** for clean separation of concerns:
+The system is split into **three core modules** for clean separation of concerns:
 
 - **`mouse_controller.py`** — Camera, head tracking, blink detection, HUD overlays  
 - **`speech_controller.py`** — Voice recognition, TTS engine, voice command processing  
 
-The **`main.py`** file is the entry point that wires both modules together.
+- **`hand_controller.py`** â€” Hand tracking, gesture recognition, gesture-to-action mapping  
+
+The **`main.py`** file is the entry point that wires the modules together.
 
 ---
 
@@ -219,6 +221,25 @@ ollama list
 python main.py
 ```
 
+To start directly in hand mode:
+
+```powershell
+$env:CONTROL_MODE="hand"
+python main.py
+```
+
+Live mode switching is available while the camera window is open: `H` for hand mode, `F` for head mode, `M` for microphone toggle, and `ESC` to exit.
+
+### Hand Gesture Mapping (Hand Mode)
+
+| Gesture | Action |
+|---|---|
+| ☝️ Index finger only | Cursor movement |
+| 🤏 Thumb + Index (Pinch) | Left click |
+| ✌️ Two fingers + move | Scroll |
+| 🤟 Three fingers (Index + Middle + Ring) | Right click |
+| ✋ Open palm | Pause |
+
 On startup you will see:
 1. A terminal banner showing the status of TTS, Voice, Cursor, and Click systems.
 2. An OpenCV window titled **"Blink-Click Virtual Mouse | Accessibility Edition"**.
@@ -390,6 +411,9 @@ If the intent is unclear, risky, or security-sensitive, the request is blocked o
 
 | Key | Action |
 |---|---|
+| **H** | Switch to hand gesture mode |
+| **F** | Switch to head / blink mode |
+| **M** | Toggle microphone on or off |
 | **ESC** | Exit the program |
 
 ---

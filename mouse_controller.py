@@ -97,6 +97,27 @@ class MouseConfig:
     detection_confidence: float = 0.55
     tracking_confidence: float = 0.55
 
+    # Hand-tracking cursor mapping boundaries (normalised hand coords)
+    hand_x_min: float = 0.10
+    hand_x_max: float = 0.90
+    hand_y_min: float = 0.12
+    hand_y_max: float = 0.88
+
+    # Hand cursor smoothing
+    hand_cursor_lerp: float = 0.32
+    hand_filter_min_cutoff: float = 0.65
+    hand_filter_beta: float = 0.12
+
+    # Hand gesture thresholds
+    hand_pinch_threshold_px: int = 34
+    hand_right_click_threshold_px: int = 30
+    hand_open_palm_release_px: int = 52
+    hand_gesture_confirm_frames: int = 3
+    hand_click_cooldown_s: float = 0.55
+    hand_scroll_deadband_px: int = 12
+    hand_scroll_step_px: int = 16
+    hand_scroll_unit: int = 70
+
 
 # ================================================================
 #  ONE-EURO FILTER  – jitter-free smooth cursor
@@ -559,6 +580,26 @@ class HeadTracker:
         self._nose_buf_y: list[float] = []
         self._last_filtered_x: float = self.cur_x
         self._last_filtered_y: float = self.cur_y
+
+    def sync_to_cursor(self) -> None:
+        """Reset internal smoothing around the current OS cursor position."""
+        pos_x, pos_y = pyautogui.position()
+        self.cur_x = float(pos_x)
+        self.cur_y = float(pos_y)
+        self._nose_buf_x.clear()
+        self._nose_buf_y.clear()
+        self._last_filtered_x = self.cur_x
+        self._last_filtered_y = self.cur_y
+        self._filter_x = OneEuroFilter(
+            min_cutoff=self.cfg.filter_min_cutoff,
+            beta=self.cfg.filter_beta,
+            d_cutoff=self.cfg.filter_d_cutoff,
+        )
+        self._filter_y = OneEuroFilter(
+            min_cutoff=self.cfg.filter_min_cutoff,
+            beta=self.cfg.filter_beta,
+            d_cutoff=self.cfg.filter_d_cutoff,
+        )
 
     @staticmethod
     def _apply_response_curve(value: float, curve: float) -> float:
