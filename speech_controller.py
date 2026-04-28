@@ -1768,6 +1768,10 @@ def _should_route_to_chat(text: str) -> bool:
     cleaned = _clean_voice_text(text)
     if not cleaned:
         return False
+    if _looks_like_desktop_action_request(cleaned):
+        return False
+    if _answer_project_faq(cleaned):
+        return True
     if _looks_like_question(cleaned):
         return True
     if "chat bot" in cleaned or "chatbot" in cleaned:
@@ -1775,20 +1779,119 @@ def _should_route_to_chat(text: str) -> bool:
     return any(cleaned.startswith(prefix) for prefix in CHAT_PREFIXES)
 
 
+def _looks_like_desktop_action_request(text: str) -> bool:
+    """Return True when a question-shaped phrase is really a command."""
+    cleaned = _clean_voice_text(text)
+    if not cleaned:
+        return False
+
+    normalized = _normalize_request_text(cleaned)
+    action_prefixes = (
+        "open ",
+        "close ",
+        "type ",
+        "write ",
+        "input ",
+        "enter text ",
+        "press ",
+        "hit ",
+        "tap ",
+        "use ctrl",
+        "use control",
+        "use alt",
+        "click",
+        "double click",
+        "right click",
+        "left click",
+        "scroll ",
+        "drag",
+        "minimize",
+        "maximize",
+        "restore",
+        "search ",
+        "search for ",
+        "play ",
+    )
+    exact_actions = {
+        "copy",
+        "paste",
+        "cut",
+        "undo",
+        "redo",
+        "select all",
+        "save",
+        "new tab",
+        "close tab",
+        "find",
+        "stop",
+        "stop app",
+        "stop assistant",
+        "quit assistant",
+        "exit assistant",
+    }
+    return normalized in exact_actions or normalized.startswith(action_prefixes)
+
+
 def _answer_project_faq(text: str) -> Optional[str]:
     cleaned = _clean_voice_text(text)
     if not cleaned:
         return None
 
-    for keywords, answer in PROJECT_FAQ:
-        if any(keyword in cleaned for keyword in keywords):
-            return answer
+    project_terms = (
+        "blink click",
+        "virtual mouse",
+        "project",
+        "this app",
+        "software",
+        "system",
+        "assistant",
+    )
+    has_project_context = any(term in cleaned for term in project_terms)
 
-    if "blink" in cleaned and "click" in cleaned:
-        return "Blink clicks use the eye aspect ratio to detect intentional blinks and translate them into left or right clicks."
-    if "head" in cleaned or "cursor" in cleaned:
+    if ("what is" in cleaned or "about" in cleaned) and has_project_context:
+        return PROJECT_FAQ[0][1]
+    if (
+        "how it works" in cleaned
+        or "how does it work" in cleaned
+        or ("working" in cleaned and has_project_context)
+    ):
+        return PROJECT_FAQ[1][1]
+    if "what can you do" in cleaned or (
+        any(term in cleaned for term in ("features", "capabilities"))
+        and has_project_context
+    ):
+        return PROJECT_FAQ[2][1]
+    if (
+        "wake word" in cleaned
+        or "voice command" in cleaned
+        or ("voice" in cleaned and has_project_context)
+    ):
+        return PROJECT_FAQ[3][1]
+    if (
+        "how to run" in cleaned
+        or "run project" in cleaned
+        or "start project" in cleaned
+        or ("launch" in cleaned and has_project_context)
+    ):
+        return PROJECT_FAQ[4][1]
+    if "exit" in cleaned or "quit" in cleaned or ("stop" in cleaned and has_project_context):
+        return PROJECT_FAQ[5][1]
+    if (
+        "camera" in cleaned
+        or "webcam" in cleaned
+        or ("not opening" in cleaned and has_project_context)
+    ):
+        return PROJECT_FAQ[6][1]
+    if "requirements" in cleaned or "prerequisites" in cleaned:
+        return PROJECT_FAQ[7][1]
+
+    if (
+        "head tracking" in cleaned
+        or "cursor control" in cleaned
+        or (("head" in cleaned or "cursor" in cleaned) and has_project_context)
+    ):
         return "Head movement is mapped to the screen using the nose tip landmark and smoothed to reduce jitter."
-    if "voice command" in cleaned or "command" in cleaned:
+    if "voice command" in cleaned or ("command" in cleaned and has_project_context):
         return "Voice commands start with the wake word, then you can say open, type, scroll, press keys, or ask a question."
 
     return None
@@ -3274,6 +3377,36 @@ class VoiceCommandProcessor:
             self.pending_plan = None
             self.last_status = "Pending cleared"
 
+        if _should_route_to_chat(text):
+            self.last_status = "Answering"
+            self._speak(self._question_thinking_reply())
+            question_text = _strip_chat_prefix(text) or text
+
+            answer = _answer_project_faq(question_text)
+            if not answer and self.brain:
+                answer = self.brain.answer_question(question_text)
+            if not answer and self.cloud_brain:
+                answer = self.cloud_brain.answer_question(question_text)
+
+            if answer:
+                self.last_status = "Answered"
+                logger.info("Answered via project chat: '%s'", question_text)
+                self._speak(answer)
+                return False
+
+            self.last_status = "Answer failed"
+            logger.info("Chat assistant did not return an answer for: '%s'", question_text)
+            if self.cloud_brain and self.cloud_brain.last_error:
+                self._speak(self.cloud_brain.last_error)
+            elif self.brain and self.brain.last_error:
+                self._speak(self.brain.last_error)
+            else:
+                self._speak(
+                    "I can answer questions about Blink-Click Virtual Mouse. "
+                    "For broader questions, enable Ollama or the cloud brain."
+                )
+            return False
+
         plan = plan_task(
             text,
             self.brain,
@@ -3290,36 +3423,6 @@ class VoiceCommandProcessor:
             return False
 
         if decision == "noop":
-            if _should_route_to_chat(text):
-                self.last_status = "Answering"
-                self._speak(self._question_thinking_reply())
-                question_text = _strip_chat_prefix(text) or text
-
-                answer = _answer_project_faq(question_text)
-                if not answer and self.brain:
-                    answer = self.brain.answer_question(question_text)
-                if not answer and self.cloud_brain:
-                    answer = self.cloud_brain.answer_question(question_text)
-
-                if answer:
-                    self.last_status = "Answered"
-                    logger.info("Answered via project chat: '%s'", question_text)
-                    self._speak(answer)
-                    return False
-
-                self.last_status = "Answer failed"
-                logger.info("Chat assistant did not return an answer for: '%s'", question_text)
-                if self.cloud_brain and self.cloud_brain.last_error:
-                    self._speak(self.cloud_brain.last_error)
-                elif self.brain and self.brain.last_error:
-                    self._speak(self.brain.last_error)
-                else:
-                    self._speak(
-                        "I can answer questions about Blink-Click Virtual Mouse. "
-                        "For broader questions, enable Ollama or the cloud brain."
-                    )
-                return False
-
             self.last_status = "No match"
             logger.info("No safe voice action for: '%s'", text)
             self._speak(self._no_match_reply(reply))

@@ -65,14 +65,49 @@ def _answer_faq(text: str) -> str | None:
     cleaned = _clean_text(text)
     if not cleaned:
         return None
-    for keywords, answer in _FAQ:
-        if any(keyword in cleaned for keyword in keywords):
-            return answer
+
+    project_terms = (
+        "blink click",
+        "virtual mouse",
+        "project",
+        "this app",
+        "software",
+        "system",
+        "assistant",
+    )
+    has_project_context = any(term in cleaned for term in project_terms)
+
+    if ("what is" in cleaned or "about" in cleaned) and has_project_context:
+        return _FAQ[0][1]
+    if (
+        "how it works" in cleaned
+        or "how does it work" in cleaned
+        or ("working" in cleaned and has_project_context)
+    ):
+        return _FAQ[1][1]
+    if "what can you do" in cleaned or (
+        any(term in cleaned for term in ("features", "capabilities"))
+        and has_project_context
+    ):
+        return _FAQ[2][1]
+    if "wake word" in cleaned or "voice command" in cleaned or ("voice" in cleaned and has_project_context):
+        return _FAQ[3][1]
+    if (
+        "how to run" in cleaned
+        or "run project" in cleaned
+        or "start project" in cleaned
+        or ("launch" in cleaned and has_project_context)
+    ):
+        return _FAQ[4][1]
     if "blink" in cleaned and "click" in cleaned:
         return "Blink clicks use the eye aspect ratio to detect intentional blinks and translate them into left or right clicks."
-    if "head" in cleaned or "cursor" in cleaned:
+    if (
+        "head tracking" in cleaned
+        or "cursor control" in cleaned
+        or (("head" in cleaned or "cursor" in cleaned) and has_project_context)
+    ):
         return "Head movement is mapped to the screen using the nose tip landmark and smoothed to reduce jitter."
-    if "voice command" in cleaned or "command" in cleaned:
+    if "voice command" in cleaned or ("command" in cleaned and has_project_context):
         return "Voice commands start with the wake word, then you can say open, type, scroll, press keys, or ask a question."
     return None
 

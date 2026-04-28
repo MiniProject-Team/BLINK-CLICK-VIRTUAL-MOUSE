@@ -623,7 +623,7 @@ def main() -> None:
                     )
                     avg_ear = (left_ear + right_ear) / 2
 
-                    blink_result = blink_detector.update(avg_ear, now)
+                    blink_result = blink_detector.update(left_ear, right_ear, now)
                     if blink_result == "left":
                         pyautogui.click()
                         blink_feedback_text = "LEFT CLICK"
