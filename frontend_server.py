@@ -44,8 +44,8 @@ _FAQ: tuple[tuple[tuple[str, ...], str], ...] = (
         "It supports head-tracked cursor control, blink-based clicking, voice commands with a wake word, and optional local AI planning through Ollama.",
     ),
     (
-        ("voice", "wake word", "ashu"),
-        "Say the wake word 'Ashu' before a command. You can change it with the WAKE_WORD environment variable.",
+        ("voice", "wake word", "jarvis"),
+        "Say the wake word 'Jarvis' before a command. You can change it with the WAKE_WORD environment variable.",
     ),
     (
         ("run", "start", "launch", "how to run"),

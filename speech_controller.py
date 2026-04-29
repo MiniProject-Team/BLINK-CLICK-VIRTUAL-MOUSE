@@ -86,7 +86,7 @@ SUPPORTED_STEP_ACTIONS: tuple[str, ...] = (
     "noop",
 )
 
-DEFAULT_WAKE_WORD = "ashu"
+DEFAULT_WAKE_WORD = "jarvis"
 DEFAULT_COMMAND_WINDOW_S = 8.0
 DEFAULT_CONFIRM_WINDOW_S = 15.0
 MAX_PLAN_STEPS = 6
@@ -124,8 +124,8 @@ VOICE_TEXT_REPLACEMENTS: tuple[tuple[str, str], ...] = (
     ("micro soft edge", "microsoft edge"),
     ("minimise", "minimize"),
     ("maximise", "maximize"),
-    ("आशु", "ashu"),
-    ("अशु", "ashu"),
+    ("आशु", "jarvis"),
+    ("अशु", "jarvis"),
     ("हाँ", "yes"),
     ("हां", "yes"),
     ("नहीं", "no"),
@@ -374,8 +374,8 @@ PROJECT_FAQ: tuple[tuple[tuple[str, ...], str], ...] = (
         "It supports head-tracked cursor control, blink-based clicking, voice commands with a wake word, and optional local AI planning through Ollama.",
     ),
     (
-        ("voice", "wake word", "ashu"),
-        "Say the wake word 'Ashu' before a command. You can change it with the WAKE_WORD environment variable.",
+        ("voice", "wake word", "jarvis"),
+        "Say the wake word 'Jarvis' before a command. You can change it with the WAKE_WORD environment variable.",
     ),
     (
         ("run", "start", "launch", "how to run"),
@@ -383,7 +383,7 @@ PROJECT_FAQ: tuple[tuple[tuple[str, ...], str], ...] = (
     ),
     (
         ("exit", "quit", "stop"),
-        "Press ESC twice within about 1.5 seconds or say 'Ashu stop' to exit.",
+        "Press ESC twice within about 1.5 seconds or say 'Jarvis stop' to exit.",
     ),
     (
         ("camera", "webcam", "not opening"),
@@ -2018,7 +2018,7 @@ class AssistantVoice:
     """Non-blocking text-to-speech assistant."""
 
     GREETING = (
-        "Hello. I am ready. Say Ashu, then tell me what you want to do. "
+        "Hello. I am ready. Say Jarvis, then tell me what you want to do. "
         "I can help with safe desktop actions like typing, scrolling, clicks, "
         "copy and paste, opening apps, and opening websites."
     )
@@ -2079,14 +2079,14 @@ class VoiceController:
 
     Speech is only forwarded to the command queue after the wake word is heard.
     Example:
-        "ashu open youtube"
-        "ashu" -> then next phrase becomes the command
+        "jarvis open youtube"
+        "jarvis" -> then next phrase becomes the command
     """
 
     HELP_TEXT = (
-        "Say Ashu, then speak naturally. For example: open YouTube and search "
+        "Say Jarvis, then speak naturally. For example: open YouTube and search "
         "lofi music, open chrome, type hello, press enter, copy, paste, or stop. "
-        "For chat, say Ashu ask <your question>."
+        "For chat, say Jarvis ask <your question>."
     )
 
     def __init__(
@@ -2168,7 +2168,7 @@ class VoiceController:
             minimum=0.0,
             maximum=0.08,
         )
-        self.wake_word_aliases = {"ashoo", "ashuu"} if self.wake_word == "ashu" else set()
+        self.wake_word_aliases = {"jarvish", "jarves"} if self.wake_word == "jarvis" else set()
         self.wake_word_aliases.update(_parse_phrase_list(os.environ.get("WAKE_WORD_ALIASES")))
         self.wake_word_match_ratio = _clamp_float(
             os.environ.get("WAKE_WORD_MATCH_RATIO", DEFAULT_WAKE_WORD_MATCH_RATIO),
@@ -3236,7 +3236,7 @@ class VoiceCommandProcessor:
             return (
                 "confirm",
                 plan["reply"]
-                or "That action needs confirmation. Say Ashu confirm or Ashu cancel.",
+                or "That action needs confirmation. Say Jarvis confirm or Jarvis cancel.",
             )
 
         return "allow", plan["reply"]
@@ -3319,7 +3319,7 @@ class VoiceCommandProcessor:
                         VoiceController.HELP_TEXT
                         if self.voice
                         else (
-                            "Say Ashu, then speak naturally. I can click, scroll, type, "
+                            "Say Jarvis, then speak naturally. I can click, scroll, type, "
                             "press keys, open websites, and open a few safe apps."
                         )
                     )

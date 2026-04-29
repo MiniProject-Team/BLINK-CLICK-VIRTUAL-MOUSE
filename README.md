@@ -62,16 +62,16 @@ The **`main.py`** file is the entry point that wires the modules together.
 ### Voice Assistant (Speech Recognition + TTS)
 - **Google Speech API** for high-accuracy online recognition.
 - **Far-field speech enhancement** with optional gain normalization, noise gate, and optional `noisereduce` filtering before speech-to-text.
-- **Wake word support** — say **"Ashu"** before your request, like a desktop assistant.
+- **Wake word support** — say **"Jarvis"** before your request, like a desktop assistant.
 - **Continuous conversation mode** keeps listening for follow-up commands for a short timeout after the first valid request.
 - **Multi-language support** via `VOICE_LANGUAGES` plus built-in Hindi / Hinglish command normalization.
 - **Hybrid planner** — local rule engine runs first; if no safe local match, optional **Ollama phi3** plans the task.
 - **Cloud fallback brain** — optional OpenAI-compatible API can answer broader questions or plan requests that local logic cannot map safely.
 - **Secure execution layer** blocks unsafe requests (delete/hack/system-level abuse) before action runs.
-- **Confirmation flow** for sensitive actions: **"Ashu confirm"** or **"Ashu cancel"**.
+- **Confirmation flow** for sensitive actions: **"Jarvis confirm"** or **"Jarvis cancel"**.
 - **Compound command handling** supports phrases like "open chrome and search AI tools".
 - **Smart normalization** improves recognition quality (for example, "open up youtube" -> "open youtube").
-- **Fuzzy wake-word matching** supports close variants like "ashoo" and "ashuu".
+- **Fuzzy wake-word matching** supports close variants like "jarvish" and "jarves".
 - **Wake command window** listens for command text for a short time after wake-word detection.
 - **Step-based action plans** are validated and executed one step at a time.
 - **pyttsx3** for spoken feedback (the assistant talks back).
@@ -183,7 +183,7 @@ Environment variables:
 - `OLLAMA_MODEL=phi3` choose model
 - `OLLAMA_HOST=http://127.0.0.1:11434` Ollama endpoint
 - `OLLAMA_TIMEOUT=25` planner timeout in seconds
-- `WAKE_WORD=ashu` change the wake word if needed
+- `WAKE_WORD=jarvis` change the wake word if needed
 - `VOICE_LANGUAGES=en-IN,hi-IN` try multiple recognition languages in order
 - `VOICE_CONVERSATION_MODE=1` keep a short follow-up window after the first command
 - `VOICE_CONVERSATION_TIMEOUT_S=9` follow-up timeout in seconds
@@ -244,9 +244,9 @@ On startup you will see:
 1. A terminal banner showing the status of TTS, Voice, Cursor, and Click systems.
 2. An OpenCV window titled **"Blink-Click Virtual Mouse | Accessibility Edition"**.
 3. The assistant will greet you with a spoken message.
-4. Voice commands start with the wake word, for example: **"Ashu open YouTube"**. If conversation mode is on, short follow-up commands can run without repeating the wake word until the timeout expires.
+4. Voice commands start with the wake word, for example: **"Jarvis open YouTube"**. If conversation mode is on, short follow-up commands can run without repeating the wake word until the timeout expires.
 
-**To exit:** Press the **ESC** key, or say **"Ashu stop"**.
+**To exit:** Press the **ESC** key, or say **"Jarvis stop"**.
 
 ---
 
@@ -393,15 +393,15 @@ Audio -> Wake Word -> Optional Far-Field Cleanup -> Speech to Text -> Text Norma
 
 The assistant is **not command-locked** anymore. Start with the wake word, then speak naturally:
 
-- "Ashu open youtube and search lo-fi music"
-- "Ashu scroll down a bit"
-- "Ashu minimize window"
-- "Ashu maximize screen"
-- "Ashu restore window"
-- "Ashu type hello this is ayush"
-- "Ashu press enter"
-- "Ashu open notepad"
-- "Ashu stop"
+- "Jarvis open youtube and search lo-fi music"
+- "Jarvis scroll down a bit"
+- "Jarvis minimize window"
+- "Jarvis maximize screen"
+- "Jarvis restore window"
+- "Jarvis type hello this is ayush"
+- "Jarvis press enter"
+- "Jarvis open notepad"
+- "Jarvis stop"
 
 If the intent is unclear, risky, or security-sensitive, the request is blocked or asks for confirmation.
 
