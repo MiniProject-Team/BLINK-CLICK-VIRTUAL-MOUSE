@@ -150,7 +150,7 @@ export default function BlinkClick() {
     error: "",
   });
   const [voiceCommands, setVoiceCommands] = useState([]);
-  const [voiceMessage, setVoiceMessage] = useState("Loading recent commands...");
+  const [voiceMessage, setVoiceMessage] = useState("Loading history from frontend_server.err...");
   const [chatOpen, setChatOpen] = useState(false);
   const [chatInput, setChatInput] = useState("");
   const [chatMessages, setChatMessages] = useState([
@@ -356,7 +356,7 @@ export default function BlinkClick() {
 
         const commands = Array.isArray(data.commands) ? data.commands : [];
         setVoiceCommands(commands);
-        setVoiceMessage(data.message || "Recent commands from system logs.");
+        setVoiceMessage(data.message || "Complete history from frontend_server.err.");
       } catch {
         if (!active) {
           return;
@@ -374,14 +374,6 @@ export default function BlinkClick() {
       window.clearInterval(timer);
     };
   }, []);
-
-  useEffect(() => {
-    if (status.running) {
-      return;
-    }
-    setVoiceCommands([]);
-    setVoiceMessage("Project is not running. Recent commands cleared.");
-  }, [status.running]);
 
   async function handleStart() {
     setIsStarting(true);
@@ -570,6 +562,10 @@ export default function BlinkClick() {
     }
   }
 
+  function handleCameraToggle() {
+    setCameraEnabled((current) => !current);
+  }
+
   function handleChatKeyDown(event) {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
@@ -581,10 +577,11 @@ export default function BlinkClick() {
     .map((entry) => {
       if (!entry) return null;
       if (typeof entry === "string") {
-        return { time: "", text: entry };
+        return { line: 0, time: "", text: entry };
       }
       if (typeof entry === "object") {
         return {
+          line: Number(entry.line) || 0,
           time: entry.time || "",
           text: entry.text || "",
         };
@@ -795,15 +792,30 @@ export default function BlinkClick() {
               <h3>Calibration</h3>
               <p>Live camera feed, facial geometry checks, and tracking readiness.</p>
             </div>
-            <span className={`status-pill ${cameraInfo.state}`.trim()}>
-              {cameraInfo.state === "active"
-                ? "Camera Active"
-                : cameraInfo.state === "busy"
-                  ? "Engine Using Camera"
-                  : cameraInfo.state === "error"
-                    ? "Camera Blocked"
-                    : "Checking"}
-            </span>
+            <div className="section-head-actions">
+              <button
+                className={`camera-power-toggle ${cameraEnabled ? "on" : "off"}`.trim()}
+                type="button"
+                onClick={handleCameraToggle}
+                aria-pressed={cameraEnabled}
+                aria-label={cameraEnabled ? "Turn camera off" : "Turn camera on"}
+                title={cameraEnabled ? "Turn camera off" : "Turn camera on"}
+              >
+                <span className="material-symbols-outlined">
+                  {cameraEnabled ? "videocam" : "videocam_off"}
+                </span>
+                <span>{cameraEnabled ? "Camera On" : "Camera Off"}</span>
+              </button>
+              <span className={`status-pill ${cameraInfo.state}`.trim()}>
+                {cameraInfo.state === "active"
+                  ? "Camera Active"
+                  : cameraInfo.state === "busy"
+                    ? "Engine Using Camera"
+                    : cameraInfo.state === "error"
+                      ? "Camera Blocked"
+                      : "Checking"}
+              </span>
+            </div>
           </header>
 
           <div className="calibration-grid">
@@ -828,6 +840,19 @@ export default function BlinkClick() {
                   <div className="overlay-target" />
                 </div>
                 {cameraInfo.state === "error" ? <div className="camera-error">{cameraInfo.error}</div> : null}
+                <button
+                  className={`camera-toggle ${cameraEnabled ? "on" : "off"}`.trim()}
+                  type="button"
+                  onClick={handleCameraToggle}
+                  aria-pressed={cameraEnabled}
+                  aria-label={cameraEnabled ? "Turn camera off" : "Turn camera on"}
+                  title={cameraEnabled ? "Camera is on. Click to turn off" : "Camera is off. Click to turn on"}
+                >
+                  <span className="material-symbols-outlined">
+                    {cameraEnabled ? "videocam" : "videocam_off"}
+                  </span>
+                  <span>{cameraEnabled ? "Camera On" : "Camera Off"}</span>
+                </button>
                 <button
                   className={`mic-toggle ${voiceEnabled ? "on" : ""}`.trim()}
                   type="button"
@@ -916,7 +941,7 @@ export default function BlinkClick() {
             <article className="panel voice-console">
               <div className="panel-head inline">
                 <div>
-                  <h3>Recent User Commands</h3>
+                  <h3>frontend_server.err History</h3>
                   <p>{voiceMessage}</p>
                 </div>
                 <span className="material-symbols-outlined">graphic_eq</span>
@@ -925,12 +950,14 @@ export default function BlinkClick() {
                 {voiceCommandItems.length ? (
                   voiceCommandItems.map((command, index) => (
                     <div className="command-row" key={`${command.text}-${index}`}>
-                      <span className="command-time">{command.time || "Now"}</span>
+                      <span className="command-time">
+                        {command.time || (command.line ? `L${command.line}` : "LOG")}
+                      </span>
                       <span className="command-text">{command.text}</span>
                     </div>
                   ))
                 ) : (
-                  <div className="command-empty">No user commands detected yet.</div>
+                  <div className="command-empty">No history detected in frontend_server.err yet.</div>
                 )}
               </div>
             </article>
@@ -962,6 +989,21 @@ export default function BlinkClick() {
                 >
                   <span className="material-symbols-outlined">{voiceEnabled ? "mic" : "mic_off"}</span>
                   <span>{voiceEnabled ? (micListening ? "Mic On (Auto)" : "Mic On") : "Mic Off"}</span>
+                </button>
+              </div>
+              <div className="voice-camera-control">
+                <button
+                  className={`camera-toggle voice-camera-toggle ${cameraEnabled ? "on" : "off"}`.trim()}
+                  type="button"
+                  onClick={handleCameraToggle}
+                  aria-pressed={cameraEnabled}
+                  aria-label={cameraEnabled ? "Turn camera off" : "Turn camera on"}
+                  title={cameraEnabled ? "Camera is on. Click to turn off" : "Camera is off. Click to turn on"}
+                >
+                  <span className="material-symbols-outlined">
+                    {cameraEnabled ? "videocam" : "videocam_off"}
+                  </span>
+                  <span>{cameraEnabled ? "Camera On" : "Camera Off"}</span>
                 </button>
               </div>
               <div className="voice-defaults">

@@ -8,7 +8,7 @@ This module provides:
   • Head-tracking cursor control via MediaPipe Face Mesh (nose-tip)
   • One-Euro filter for glass-smooth, tremor-resilient movement
   • Dead-zone filtering to ignore micro-tremors
-  • Blink detection (single long blink → left click, double → right click)
+  • Blink detection (both eyes → left click, either single eye → right click)
     • (dwell-click feature removed)
   • Threaded camera capture for zero-blocking reads
   • HUD overlays (status panel, EAR bar, dwell arc, click feedback)
@@ -97,6 +97,27 @@ class MouseConfig:
     detection_confidence: float = 0.55
     tracking_confidence: float = 0.55
 
+    # Hand-tracking cursor mapping boundaries (normalised hand coords)
+    hand_x_min: float = 0.10
+    hand_x_max: float = 0.90
+    hand_y_min: float = 0.12
+    hand_y_max: float = 0.88
+
+    # Hand cursor smoothing
+    hand_cursor_lerp: float = 0.32
+    hand_filter_min_cutoff: float = 0.65
+    hand_filter_beta: float = 0.12
+
+    # Hand gesture thresholds
+    hand_pinch_threshold_px: int = 34
+    hand_right_click_threshold_px: int = 30
+    hand_open_palm_release_px: int = 52
+    hand_gesture_confirm_frames: int = 3
+    hand_click_cooldown_s: float = 0.55
+    hand_scroll_deadband_px: int = 12
+    hand_scroll_step_px: int = 16
+    hand_scroll_unit: int = 70
+
 
 # ================================================================
 #  ONE-EURO FILTER  – jitter-free smooth cursor
@@ -161,8 +182,9 @@ class BlinkDetector:
     """
     Detects intentional blinks via Eye Aspect Ratio (EAR).
 
-    • Single long blink → LEFT CLICK
-    • Two rapid long blinks → RIGHT CLICK
+    • Both eyes blink → LEFT CLICK
+    • Left eye only → RIGHT CLICK
+    • Right eye only → RIGHT CLICK
     """
 
     def __init__(self, cfg: MouseConfig) -> None:
@@ -179,99 +201,83 @@ class BlinkDetector:
         self._blink_start: float = 0.0
         self._blink_detected: bool = False
         self._cooldown_until: float = 0.0
-        self._pending_single_blink_at: Optional[float] = None
+        self._saw_left_closed: bool = False
+        self._saw_right_closed: bool = False
+        self._saw_both_closed: bool = False
 
-    def update(self, avg_ear: float, now: float) -> Optional[str]:
+    def update(self, left_ear: float, right_ear: float, now: float) -> Optional[str]:
         """
-        Call every frame with the average EAR value.
+        Call every frame with separate left and right EAR values.
 
         Returns
         -------
         "left", "right", or None
         """
-        if avg_ear < self.threshold:
+        left_closed = left_ear < self.threshold
+        right_closed = right_ear < self.threshold
+        any_closed = left_closed or right_closed
+        both_closed = left_closed and right_closed
+
+        if any_closed:
             if not self._blink_detected:
                 self._blink_start = now
                 self._blink_detected = True
+                self._saw_left_closed = False
+                self._saw_right_closed = False
+                self._saw_both_closed = False
                 logger.debug(
-                    "BlinkDetector closed eyes (ear=%.3f threshold=%.3f)",
-                    avg_ear,
+                    "BlinkDetector closed eye(s) (left_ear=%.3f right_ear=%.3f threshold=%.3f)",
+                    left_ear,
+                    right_ear,
                     self.threshold,
                 )
+
+            self._saw_left_closed = self._saw_left_closed or left_closed
+            self._saw_right_closed = self._saw_right_closed or right_closed
+            self._saw_both_closed = self._saw_both_closed or both_closed
             return None
 
-        # Keep the blink active until the eyes reopen clearly above the threshold.
-        if self._blink_detected and avg_ear < self.release_threshold:
+        # Keep the gesture active until both eyes reopen clearly above the threshold.
+        if (
+            self._blink_detected
+            and (left_ear < self.release_threshold or right_ear < self.release_threshold)
+        ):
             return None
 
         if self._blink_detected:
             duration = now - self._blink_start
             self._blink_detected = False
             logger.debug(
-                "BlinkDetector reopened eyes (duration=%.3fs ear=%.3f)",
+                "BlinkDetector reopened eyes (duration=%.3fs left_ear=%.3f right_ear=%.3f)",
                 duration,
-                avg_ear,
+                left_ear,
+                right_ear,
             )
 
             if duration >= self.intentional_duration:
-                if self._pending_single_blink_at is not None:
-                    gap = now - self._pending_single_blink_at
-                else:
-                    gap = None
-
-                if gap is not None and gap < self.double_gap:
-                    self._pending_single_blink_at = None
-                    if now < self._cooldown_until:
-                        logger.debug(
-                            "BlinkDetector suppressed right click during cooldown "
-                            "(gap=%.3fs cooldown_remaining=%.3fs)",
-                            gap,
-                            self._cooldown_until - now,
-                        )
-                        return None
-
-                    self._cooldown_until = now + self.click_cooldown_s
-                    logger.info(
-                        "BlinkDetector emitted right click (gap=%.3fs cooldown=%.2fs)",
-                        gap,
-                        self.click_cooldown_s,
+                if now < self._cooldown_until:
+                    logger.debug(
+                        "BlinkDetector suppressed click during cooldown "
+                        "(cooldown_remaining=%.3fs)",
+                        self._cooldown_until - now,
                     )
-                    return "right"
+                    return None
 
-                self._pending_single_blink_at = now
-                logger.debug(
-                    "BlinkDetector queued left click candidate "
-                    "(duration=%.3fs wait_for_double=%.2fs)",
+                click = "left" if self._saw_both_closed else "right"
+                self._cooldown_until = now + self.click_cooldown_s
+                logger.info(
+                    "BlinkDetector emitted %s click (duration=%.3fs cooldown=%.2fs)",
+                    click,
                     duration,
-                    self.double_gap,
+                    self.click_cooldown_s,
                 )
-                return None
+                return click
 
             logger.debug(
                 "BlinkDetector ignored short blink (duration=%.3fs minimum=%.3fs)",
                 duration,
                 self.intentional_duration,
             )
-
-        if self._pending_single_blink_at is not None:
-            pending_age = now - self._pending_single_blink_at
-            if pending_age >= self.double_gap:
-                self._pending_single_blink_at = None
-                if now < self._cooldown_until:
-                    logger.debug(
-                        "BlinkDetector suppressed pending left click during cooldown "
-                        "(ear=%.3f cooldown_remaining=%.3fs)",
-                        avg_ear,
-                        self._cooldown_until - now,
-                    )
-                    return None
-
-                self._cooldown_until = now + self.click_cooldown_s
-                logger.info(
-                    "BlinkDetector emitted left click (cooldown=%.2fs)",
-                    self.click_cooldown_s,
-                )
-                return "left"
 
         return None
 
@@ -559,6 +565,26 @@ class HeadTracker:
         self._nose_buf_y: list[float] = []
         self._last_filtered_x: float = self.cur_x
         self._last_filtered_y: float = self.cur_y
+
+    def sync_to_cursor(self) -> None:
+        """Reset internal smoothing around the current OS cursor position."""
+        pos_x, pos_y = pyautogui.position()
+        self.cur_x = float(pos_x)
+        self.cur_y = float(pos_y)
+        self._nose_buf_x.clear()
+        self._nose_buf_y.clear()
+        self._last_filtered_x = self.cur_x
+        self._last_filtered_y = self.cur_y
+        self._filter_x = OneEuroFilter(
+            min_cutoff=self.cfg.filter_min_cutoff,
+            beta=self.cfg.filter_beta,
+            d_cutoff=self.cfg.filter_d_cutoff,
+        )
+        self._filter_y = OneEuroFilter(
+            min_cutoff=self.cfg.filter_min_cutoff,
+            beta=self.cfg.filter_beta,
+            d_cutoff=self.cfg.filter_d_cutoff,
+        )
 
     @staticmethod
     def _apply_response_curve(value: float, curve: float) -> float:

@@ -13,7 +13,6 @@ from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-
 ROOT_DIR = Path(__file__).resolve().parent
 FRONTEND_DIR = ROOT_DIR / "frontend"
 DIST_DIR = FRONTEND_DIR / "dist"
@@ -45,8 +44,8 @@ _FAQ: tuple[tuple[tuple[str, ...], str], ...] = (
         "It supports head-tracked cursor control, blink-based clicking, voice commands with a wake word, and optional local AI planning through Ollama.",
     ),
     (
-        ("voice", "wake word", "ashu"),
-        "Say the wake word 'Ashu' before a command. You can change it with the WAKE_WORD environment variable.",
+        ("voice", "wake word", "jarvis"),
+        "Say the wake word 'Jarvis' before a command. You can change it with the WAKE_WORD environment variable.",
     ),
     (
         ("run", "start", "launch", "how to run"),
@@ -66,14 +65,49 @@ def _answer_faq(text: str) -> str | None:
     cleaned = _clean_text(text)
     if not cleaned:
         return None
-    for keywords, answer in _FAQ:
-        if any(keyword in cleaned for keyword in keywords):
-            return answer
+
+    project_terms = (
+        "blink click",
+        "virtual mouse",
+        "project",
+        "this app",
+        "software",
+        "system",
+        "assistant",
+    )
+    has_project_context = any(term in cleaned for term in project_terms)
+
+    if ("what is" in cleaned or "about" in cleaned) and has_project_context:
+        return _FAQ[0][1]
+    if (
+        "how it works" in cleaned
+        or "how does it work" in cleaned
+        or ("working" in cleaned and has_project_context)
+    ):
+        return _FAQ[1][1]
+    if "what can you do" in cleaned or (
+        any(term in cleaned for term in ("features", "capabilities"))
+        and has_project_context
+    ):
+        return _FAQ[2][1]
+    if "wake word" in cleaned or "voice command" in cleaned or ("voice" in cleaned and has_project_context):
+        return _FAQ[3][1]
+    if (
+        "how to run" in cleaned
+        or "run project" in cleaned
+        or "start project" in cleaned
+        or ("launch" in cleaned and has_project_context)
+    ):
+        return _FAQ[4][1]
     if "blink" in cleaned and "click" in cleaned:
         return "Blink clicks use the eye aspect ratio to detect intentional blinks and translate them into left or right clicks."
-    if "head" in cleaned or "cursor" in cleaned:
+    if (
+        "head tracking" in cleaned
+        or "cursor control" in cleaned
+        or (("head" in cleaned or "cursor" in cleaned) and has_project_context)
+    ):
         return "Head movement is mapped to the screen using the nose tip landmark and smoothed to reduce jitter."
-    if "voice command" in cleaned or "command" in cleaned:
+    if "voice command" in cleaned or ("command" in cleaned and has_project_context):
         return "Voice commands start with the wake word, then you can say open, type, scroll, press keys, or ask a question."
     return None
 
@@ -133,6 +167,14 @@ def _tail_log(path: Path, max_lines: int = 12) -> str:
     return "\n".join(content.splitlines()[-max_lines:])
 
 
+def _read_log_lines(path: Path) -> list[str]:
+    try:
+        content = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    return content.splitlines()
+
+
 def _status_message() -> str:
     global _LAST_STATUS_MESSAGE
 
@@ -162,72 +204,25 @@ def _status_message() -> str:
     return _LAST_STATUS_MESSAGE
 
 
-def _extract_voice_commands(max_items: int = 8) -> list[dict]:
-    content = "\n".join(
-        part
-        for part in (
-            _tail_log(STDERR_LOG, max_lines=200),
-            _tail_log(STDOUT_LOG, max_lines=200),
-        )
-        if part
-    )
-    if not content:
-        return []
-
-    keywords = (
-        "user",
-        "command",
-        "recognized",
-        "transcript",
-        "[voice]",
-        "intent",
-        "utterance",
-        "said",
-        "request",
-    )
-    candidates: list[dict] = []
-    for line in content.splitlines():
-        lower = line.lower()
-        if not any(key in lower for key in keywords):
-            continue
-
+def _extract_voice_commands() -> list[dict]:
+    lines = _read_log_lines(STDERR_LOG)
+    history: list[dict] = []
+    for line_number, raw_line in enumerate(lines, start=1):
+        line = raw_line.rstrip("\r\n")
         time_match = re.match(r"^(?P<time>\d{2}:\d{2}:\d{2})\s+(?P<rest>.*)$", line)
         timestamp = ""
         message = line
         if time_match:
             timestamp = time_match.group("time")
             message = time_match.group("rest")
-
-        for token in ("INFO", "WARNING", "ERROR", "DEBUG"):
-            if token in message:
-                message = message.split(token, 1)[1].strip()
-                break
-
-        message = (
-            message.replace("[Assistant]", "")
-            .replace("[User]", "")
-            .replace("[Voice]", "")
-            .strip(" -")
+        history.append(
+            {
+                "line": line_number,
+                "time": timestamp,
+                "text": message if message else "(empty line)",
+            }
         )
-        if not message:
-            continue
-
-        candidates.append({"time": timestamp, "text": message})
-
-    if not candidates:
-        return []
-
-    seen: set[tuple[str, str]] = set()
-    deduped: list[dict] = []
-    for entry in reversed(candidates):
-        key = (entry["time"], entry["text"])
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(entry)
-
-    deduped.reverse()
-    return deduped[-max_items:]
+    return history
 
 
 def _start_project() -> tuple[bool, str]:
@@ -322,16 +317,19 @@ class FrontendHandler(SimpleHTTPRequestHandler):
             return
 
         if self.path == "/api/voice-commands":
-            if _is_running():
-                commands = _extract_voice_commands()
-                message = "Commands sourced from frontend_server.err"
+            commands = _extract_voice_commands()
+            if commands:
+                message = (
+                    f"Loaded {len(commands)} lines from {STDERR_LOG.name}. "
+                    "Showing complete session history."
+                )
             else:
-                commands = []
-                message = "Project is not running. Recent commands cleared."
+                message = f"No history found in {STDERR_LOG.name} yet."
             self._write_json(
                 {
                     "commands": commands,
                     "message": message,
+                    "source": STDERR_LOG.name,
                 }
             )
             return
