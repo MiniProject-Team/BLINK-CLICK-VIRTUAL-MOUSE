@@ -26,11 +26,11 @@ class MouseConfig:
     filter_beta: float = 0.08
     filter_d_cutoff: float = 1.0
 
-    # Dead zone (pixels) – displacements below this are ignored
+    # Dead zone (pixels) - displacements below this are ignored
     dead_zone_px: int = 6
     precision_dead_zone_px: int = 3
 
-    # Cursor interpolation factor (0–1, lower = smoother / laggier)
+    # Cursor interpolation factor (0-1, lower = smoother / laggier)
     cursor_lerp: float = 0.18
     cursor_fast_lerp: float = 0.34
     cursor_precision_lerp: float = 0.11

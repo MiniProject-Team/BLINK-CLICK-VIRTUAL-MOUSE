@@ -6,17 +6,17 @@ import img3 from "./assets/img3.png";
 
 const projectWorkflow = [
   {
-    icon: "👁️",
+    icon: "visibility",
     title: "1. Real-Time Video Capture",
     text: "The system starts by activating the webcam, which continuously captures live video of the user's face. This video is processed frame by frame using computer vision techniques.",
   },
   {
-    icon: "🧠",
+    icon: "psychology",
     title: "2. Face Detection & Landmark Extraction",
     text: "The system uses MediaPipe Face Mesh to detect the face and identify 468 facial landmark points. These landmarks help locate important regions such as the eyes, nose, and mouth with high accuracy.",
   },
   {
-    icon: "🎯",
+    icon: "ads_click",
     title: "3. Eye Tracking & Cursor Movement",
     text: "The coordinates of the eyes (or nose tracking point) are mapped to screen coordinates. Moving eyes left/right/up/down moves the cursor accordingly, and smooth tracking keeps movement stable.",
     points: [
@@ -26,7 +26,7 @@ const projectWorkflow = [
     ],
   },
   {
-    icon: "👁️‍🗨️",
+    icon: "remove_red_eye",
     title: "4. Blink Detection (Click Action)",
     text: "The system calculates the Eye Aspect Ratio (EAR) to detect blinking. When eyes are open, EAR remains stable. When eyes close, EAR decreases.",
     points: [
@@ -36,18 +36,18 @@ const projectWorkflow = [
     ],
   },
   {
-    icon: "🎤",
+    icon: "mic",
     title: "5. Voice Command Control",
     text: "The system also supports voice interaction. The microphone captures speech, speech is converted into text, and commands are matched and executed.",
     points: ["Start system", "Stop system", "Open browser"],
   },
   {
-    icon: "⚡",
+    icon: "bolt",
     title: "6. Real-Time Processing",
     text: "All operations happen in real time with continuous frame capture, instant eye tracking, fast blink detection, and immediate cursor response. This ensures a smooth and interactive experience.",
   },
   {
-    icon: "🖥️",
+    icon: "desktop_windows",
     title: "7. Final Output",
     text: "The system converts user actions into cursor movement, mouse clicks, and voice command execution.",
   },
@@ -753,7 +753,7 @@ export default function BlinkClick() {
             {projectWorkflow.map((step) => (
               <article className="workflow-card" key={step.title}>
                 <div className="workflow-head">
-                  <span>{step.icon}</span>
+                  <span className="material-symbols-outlined">{step.icon}</span>
                   <h4>{step.title}</h4>
                 </div>
                 <p>{step.text}</p>

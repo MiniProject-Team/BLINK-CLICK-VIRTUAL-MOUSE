@@ -11,13 +11,13 @@ Press ESC to exit at any time.
 
 from __future__ import annotations
 
-import cv2
 import logging
 import os
 import sys
 import time
 from typing import Optional
 
+import cv2
 import pyautogui
 
 from core.action_handler import ActionHandler
@@ -197,7 +197,7 @@ def main() -> None:
         assistant = AssistantVoice()
         assistant.greet()
     else:
-        logger.warning("pyttsx3 not found – TTS disabled. pip install pyttsx3")
+        logger.warning("pyttsx3 not found - TTS disabled. pip install pyttsx3")
 
     try:
         cam = CameraCapture(cfg)
@@ -237,7 +237,7 @@ def main() -> None:
     fps_display = 0
     exit_armed_until = 0.0
 
-    # ── Banner ───────────────────────────────────────────────────
+    # Banner
     _print_banner(
         assistant,
         voice,
@@ -303,7 +303,7 @@ def main() -> None:
     cv2.namedWindow(WINDOW_TITLE)
     cv2.setMouseCallback(WINDOW_TITLE, _on_window_mouse)
 
-    # ── Main loop ────────────────────────────────────────────────
+    # Main loop
     try:
         while state.running:
             ret, frame = cam.read()
@@ -392,19 +392,19 @@ def main() -> None:
                 status_lines.insert(2, voice.voice_processor.get_status_text()[:28])
             renderer.draw_status_panel(frame, w - 220, 4, status_lines)
 
-            # ── REST REMINDER ────────────────────────────────────
+            # Rest reminder
             if now - session_start > cfg.rest_interval:
                 renderer.draw_rest_reminder(frame, w, h)
                 session_start = now
 
-            # ── FPS ──────────────────────────────────────────────
+            # FPS
             fps_count += 1
             if now - fps_time >= 1.0:
                 fps_display = fps_count
                 fps_count = 0
                 fps_time = now
 
-            # ── STOP BUTTON ──────────────────────────────────────
+            # Stop and microphone buttons
             stop_button_state["rect"] = _draw_stop_button(
                 frame,
                 hover=bool(stop_button_state["hover"]),
@@ -416,7 +416,7 @@ def main() -> None:
                 mic_enabled=voice.is_mic_enabled(),
             )
 
-            # ── SHOW ─────────────────────────────────────────────
+            # Show frame
             cv2.imshow(WINDOW_TITLE, frame)
             key = cv2.waitKey(1) & 0xFF
 
@@ -463,7 +463,7 @@ def main() -> None:
     except KeyboardInterrupt:
         logger.info("Interrupted by user.")
 
-    # ── CLEANUP ──────────────────────────────────────────────────
+    # Cleanup
     logger.info("Shutting down ...")
     if voice.voice_processor and voice.voice_processor.drag_mode:
         pyautogui.mouseUp()
