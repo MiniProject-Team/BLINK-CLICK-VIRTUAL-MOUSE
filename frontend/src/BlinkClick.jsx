@@ -118,8 +118,10 @@ const faceChecklist = [
   "Keep head level for accurate gaze",
 ];
 
+const WAKE_WORD = "Jarvis";
+
 const voiceDefaults = [
-  "Wake word: Ashu",
+  `Wake word: ${WAKE_WORD}`,
   "Auto-confirm system actions",
   "Noise suppression: medium",
   "Language: English (India)",
