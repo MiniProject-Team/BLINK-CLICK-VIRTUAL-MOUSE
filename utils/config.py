@@ -40,6 +40,10 @@ class MouseConfig:
 
     # Blink detection
     blink_threshold: float = 0.17
+    blink_adaptive_threshold: bool = True
+    blink_closed_ratio: float = 0.62
+    blink_min_threshold: float = 0.14
+    blink_max_threshold: float = 0.24
     intentional_blink_duration: float = 0.36
     double_blink_gap: float = 0.55
     blink_release_margin: float = 0.02
@@ -61,6 +65,8 @@ class MouseConfig:
     # MediaPipe Face Mesh confidence
     detection_confidence: float = 0.55
     tracking_confidence: float = 0.55
+    head_landmark_buffer_size: int = 5
+    head_landmark_outlier_limit: float = 0.08
 
     # Hand-tracking cursor mapping boundaries (normalized hand coords)
     hand_x_min: float = 0.10

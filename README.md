@@ -63,7 +63,7 @@ The **`main.py`** file is the entry point that wires the modules together.
 - **Google Speech API** for high-accuracy online recognition.
 - **Far-field speech enhancement** with optional gain normalization, noise gate, and optional `noisereduce` filtering before speech-to-text.
 - **Wake word support** — say **"Jarvis"** before your request, like a desktop assistant.
-- **Continuous conversation mode** keeps listening for follow-up commands for a short timeout after the first valid request.
+- **Strict wake gate** ignores ordinary speech. Say **"Jarvis <command>"**, or say **"Jarvis"** and speak one command in the next ten seconds.
 - **Multi-language support** via `VOICE_LANGUAGES` plus built-in Hindi / Hinglish command normalization.
 - **Hybrid planner** — local rule engine runs first; if no safe local match, optional **Ollama phi3** plans the task.
 - **Cloud fallback brain** — optional OpenAI-compatible API can answer broader questions or plan requests that local logic cannot map safely.
@@ -185,7 +185,10 @@ Environment variables:
 - `OLLAMA_TIMEOUT=25` planner timeout in seconds
 - `WAKE_WORD=jarvis` change the wake word if needed
 - `VOICE_LANGUAGES=en-IN,hi-IN` try multiple recognition languages in order
-- `VOICE_CONVERSATION_MODE=1` keep a short follow-up window after the first command
+- `VOICE_STRICT_WAKE_WORD=1` require the wake word for every command (default)
+- `VOICE_WAKE_FUZZY_MATCH=0` accept only the wake word and configured aliases (default)
+- `VOICE_COMMAND_WINDOW_S=10` time available for one command after the wake word
+- `VOICE_CONVERSATION_MODE=1` enable optional follow-up commands after the first request; set `VOICE_STRICT_WAKE_WORD=0` to use it
 - `VOICE_CONVERSATION_TIMEOUT_S=9` follow-up timeout in seconds
 - `VOICE_FAR_FIELD_MODE=1` enable single-mic far-field tuning
 - `VOICE_NOISE_REDUCTION=1` turn on optional `noisereduce` filtering when installed
@@ -244,7 +247,7 @@ On startup you will see:
 1. A terminal banner showing the status of TTS, Voice, Cursor, and Click systems.
 2. An OpenCV window titled **"Blink-Click Virtual Mouse | Accessibility Edition"**.
 3. The assistant will greet you with a spoken message.
-4. Voice commands start with the wake word, for example: **"Jarvis open YouTube"**. If conversation mode is on, short follow-up commands can run without repeating the wake word until the timeout expires.
+4. Voice commands are wake-gated. Say **"Jarvis open YouTube"**, or say **"Jarvis"** and give one command within ten seconds.
 
 **To exit:** Press the **ESC** key, or say **"Jarvis stop"**.
 
@@ -269,6 +272,15 @@ http://127.0.0.1:3000
 ```
 
 The Start button launches `main.py` locally from the browser page through the local launcher server.
+
+For React development, the frontend command now starts both Vite and the local launcher API:
+
+```bash
+cd frontend
+npm run dev
+```
+
+Open the Vite address shown in the terminal. Its Start Project and microphone controls communicate with the actual desktop engine.
 
 ---
 
@@ -312,7 +324,7 @@ The Start button launches `main.py` locally from the browser page through the lo
 
 ### Blink Detection
 1. **Eye Aspect Ratio (EAR)** is computed for both eyes using 4 landmarks each.
-2. When EAR drops below **0.20**, a blink is detected.
+2. When EAR drops below the adaptive threshold, a blink is detected.
 3. If the blink lasts longer than **0.35 seconds** (intentional), it triggers a **left click**.
 4. If a second intentional blink occurs within **0.65 seconds**, it triggers a **right click**.
 
@@ -391,7 +403,7 @@ Audio -> Wake Word -> Optional Far-Field Cleanup -> Speech to Text -> Text Norma
 
 ## Voice Tasks
 
-The assistant is **not command-locked** anymore. Start with the wake word, then speak naturally:
+The assistant uses a strict wake gate. Start each task with the wake word, then speak naturally:
 
 - "Jarvis open youtube and search lo-fi music"
 - "Jarvis scroll down a bit"
@@ -401,6 +413,8 @@ The assistant is **not command-locked** anymore. Start with the wake word, then 
 - "Jarvis type hello this is ayush"
 - "Jarvis press enter"
 - "Jarvis open notepad"
+- "Jarvis switch to hand mode"
+- "Jarvis switch to head mode"
 - "Jarvis stop"
 
 If the intent is unclear, risky, or security-sensitive, the request is blocked or asks for confirmation.
@@ -433,6 +447,8 @@ All tuneable parameters are centralised in the `MouseConfig` dataclass in [mouse
 | `filter_beta` | `0.08` | One-Euro responsiveness when moving |
 | `dead_zone_px` | `6` | Dead zone radius (pixels) |
 | `blink_threshold` | `0.17` | EAR value below which blink is detected |
+| `blink_adaptive_threshold` | `True` | Learns the user's open-eye EAR baseline and adjusts blink sensitivity |
+| `blink_closed_ratio` | `0.62` | Ratio of open-eye baseline used for adaptive blink detection |
 | `intentional_blink_duration` | `0.36` | Minimum blink duration for a click (s) |
 | `double_blink_gap` | `0.55` | Max gap for two blinks to count as right-click (s) |
 | `click_cooldown_s` | `0.75` | Cooldown between intentional blink clicks (s) |
@@ -466,7 +482,7 @@ cfg = MouseConfig(blink_threshold=0.20, click_cooldown_s=0.90)
 | Package | Version | Purpose |
 |---|---|---|
 | `opencv-python` | >=4.6 | Camera capture & image processing |
-| `mediapipe` | >=0.10 | Face Mesh landmark detection |
+| `mediapipe` | >=0.10 | Face landmarks; current Tasks builds use `models/face_landmarker.task` |
 | `pyautogui` | >=0.9 | Mouse/keyboard automation |
 | `SpeechRecognition` | >=3.10 | Google Speech API wrapper |
 | `pyttsx3` | >=2.90 | Offline text-to-speech |

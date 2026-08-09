@@ -10,7 +10,10 @@ class ActionHandler:
         self.assistant = assistant
 
     def move(self, x: int, y: int) -> None:
-        pyautogui.moveTo(x, y, _pause=False)
+        screen_w, screen_h = pyautogui.size()
+        safe_x = max(0, min(screen_w - 1, int(x)))
+        safe_y = max(0, min(screen_h - 1, int(y)))
+        pyautogui.moveTo(safe_x, safe_y, _pause=False)
 
     def click(self, click_type: str) -> None:
         if click_type == "left":

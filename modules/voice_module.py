@@ -2,24 +2,12 @@ from __future__ import annotations
 
 import logging
 import os
-import threading
-import time
+import queue
 from typing import Optional
 
-import sounddevice as sd
-
-from speech_controller import CloudBrain, OllamaBrain, VoiceCommandProcessor
-from stt_google import GoogleSTT
-from utils.helpers import normalize
-from wake_vosk import VoskWake
+from speech_controller import CloudBrain, OllamaBrain, VoiceCommandProcessor, VoiceController
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_MIC_PREFERENCES = (
-    "headset (wings phantom)",
-    "microphone array",
-)
-
 
 def _env_bool(name: str, default: bool) -> bool:
     raw_value = os.environ.get(name)
@@ -50,82 +38,15 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
-def _pick_microphone_index() -> tuple[Optional[int], Optional[str]]:
-    mic_index_raw = os.environ.get("MIC_INDEX")
-    if mic_index_raw:
-        try:
-            idx = int(mic_index_raw)
-        except ValueError:
-            logger.warning("Invalid MIC_INDEX value '%s'; using auto-detect", mic_index_raw)
-        else:
-            try:
-                info = sd.query_devices(idx)
-                return idx, info.get("name") if isinstance(info, dict) else None
-            except Exception as exc:
-                logger.warning("MIC_INDEX %s not available: %s", idx, exc)
-
-    mic_name_raw = os.environ.get("MIC_NAME", "").strip().lower()
+def _env_optional_int(name: str) -> Optional[int]:
+    raw_value = os.environ.get(name)
+    if not raw_value:
+        return None
     try:
-        devices = sd.query_devices()
-    except Exception as exc:
-        logger.warning("Unable to query microphone devices: %s", exc)
-        return None, None
-
-    preferred_names = [
-        part.strip().lower()
-        for part in mic_name_raw.split(",")
-        if part.strip()
-    ]
-    if not preferred_names:
-        preferred_names = list(DEFAULT_MIC_PREFERENCES)
-
-    for preferred in preferred_names:
-        for idx, info in enumerate(devices):
-            if not isinstance(info, dict):
-                continue
-            if info.get("max_input_channels", 0) <= 0:
-                continue
-            name = str(info.get("name", "")).lower()
-            if preferred in name:
-                return idx, info.get("name")
-
-    default_device = sd.default.device[0] if sd.default.device else None
-    if isinstance(default_device, int) and default_device >= 0:
-        info = sd.query_devices(default_device)
-        if isinstance(info, dict) and info.get("max_input_channels", 0) > 0:
-            return default_device, info.get("name")
-
-    input_keywords = ("microphone", "mic", "headset", "array", "input", "hands-free")
-    output_keywords = ("speaker", "output", "stereo mix", "mapper - output")
-    best_idx: Optional[int] = None
-    best_name: Optional[str] = None
-    best_score = float("-inf")
-
-    for idx, info in enumerate(devices):
-        if not isinstance(info, dict):
-            continue
-        if info.get("max_input_channels", 0) <= 0:
-            continue
-        name = str(info.get("name", "")).lower()
-        score = 0
-        if any(keyword in name for keyword in input_keywords):
-            score += 10
-        if any(keyword in name for keyword in output_keywords):
-            score -= 12
-        if "stereo mix" in name:
-            score -= 8
-        if score > best_score:
-            best_score = score
-            best_idx = idx
-            best_name = info.get("name")
-
-    if best_idx is not None:
-        return best_idx, best_name
-
-    for idx, info in enumerate(devices):
-        if isinstance(info, dict) and info.get("max_input_channels", 0) > 0:
-            return idx, info.get("name")
-    return None, None
+        return int(raw_value)
+    except ValueError:
+        logger.warning("Invalid %s value '%s'; using automatic microphone selection", name, raw_value)
+        return None
 
 
 class VoiceModule:
@@ -137,11 +58,6 @@ class VoiceModule:
         self.voice_processor: Optional[VoiceCommandProcessor] = None
 
         self.wake_word = os.environ.get("WAKE_WORD", "jarvis").strip() or "jarvis"
-        vosk_model_path = (
-            os.environ.get("VOSK_MODEL_PATH", "vosk-model-small-en-in-0.4").strip()
-            or "vosk-model-small-en-in-0.4"
-        )
-
         if os.environ.get("OLLAMA_BRAIN", "1").lower() not in ("0", "false", "off"):
             timeout_s = 25.0
             try:
@@ -184,123 +100,44 @@ class VoiceModule:
                 "was provided."
             )
 
-        mic_index, mic_label = _pick_microphone_index()
-        self.mic_label = mic_label
-        if mic_index is not None:
-            logger.info("Using microphone index %d (%s)", mic_index, mic_label or "unknown")
-        else:
-            logger.warning("No input microphone detected; voice input may be unavailable.")
-
-        self.wake_listener: Optional[VoskWake] = None
-        self.stt: Optional[GoogleSTT] = None
-        self.wake_thread: Optional[threading.Thread] = None
-        self.wake_stop_event = threading.Event()
-        self.wake_enabled_event = threading.Event()
-        self.wake_status_lock = threading.Lock()
-        self.wake_status = {
-            "listening": False,
-            "last_text": "",
-            "last_time": 0.0,
-            "last_error": "",
-        }
+        self.voice_controller: Optional[VoiceController] = None
+        self.mic_label: Optional[str] = None
+        self._control_mode_requests: queue.Queue[str] = queue.Queue()
 
         if _env_bool("VOICE_ENABLED", True):
             try:
-                self.wake_listener = VoskWake(
-                    vosk_model_path,
+                self.voice_controller = VoiceController(
+                    assistant=self.assistant,
+                    energy_threshold=_env_int("VOICE_ENERGY_THRESHOLD", 350),
+                    pause_threshold=_env_float("VOICE_PAUSE_THRESHOLD", 0.55),
+                    phrase_threshold=_env_float("VOICE_PHRASE_THRESHOLD", 0.25),
+                    calibration_duration=_env_float("VOICE_CALIBRATION_S", 1.5),
+                    microphone_index=_env_optional_int("MIC_INDEX"),
+                    microphone_name=os.environ.get("MIC_NAME") or None,
+                    debug_raw_recognition=_env_bool("VOICE_DEBUG", False),
                     wake_word=self.wake_word,
-                    device=mic_index,
-                )
-                self.stt = GoogleSTT(
-                    language=os.environ.get("VOICE_LANGUAGE", "en-IN").strip() or "en-IN",
-                    mic_index=mic_index,
-                    energy_threshold=_env_int("VOICE_ENERGY_THRESHOLD", 300),
-                    dynamic_energy_threshold=_env_bool("VOICE_DYNAMIC_THRESHOLD", True),
-                    listen_timeout=_env_float("VOICE_LISTEN_TIMEOUT_S", 2.0),
-                    phrase_time_limit=_env_float("VOICE_PHRASE_LIMIT_S", 5.0),
+                    command_window_s=_env_float("VOICE_COMMAND_WINDOW_S", 10.0),
+                    acknowledge_wake=_env_bool("VOICE_ACKNOWLEDGE_WAKE", True),
                 )
                 self.voice_processor = VoiceCommandProcessor(
                     assistant=self.assistant,
-                    voice=None,
+                    voice=self.voice_controller,
                     brain=self.brain,
                     cloud_brain=self.cloud_brain,
+                    control_mode_handler=self.request_control_mode,
                 )
-                if _env_bool("VOICE_MIC_ENABLED", True):
-                    self.wake_enabled_event.set()
                 self.voice_ready = True
-                self.wake_thread = threading.Thread(target=self._wake_command_loop, daemon=True)
-                self.wake_thread.start()
-                logger.info("Vosk wake listener active (model=%s)", vosk_model_path)
+                self.mic_label = self.voice_controller.mic_name
+                logger.info("Adaptive voice controller active (microphone=%s)", self.mic_label or "default")
             except Exception as exc:
-                logger.error("Cannot start Vosk wake or Google STT: %s", exc)
+                logger.error("Cannot start voice controller: %s", exc)
         else:
             logger.info("Voice input disabled via VOICE_ENABLED.")
 
-    def _set_wake_status(
-        self,
-        *,
-        listening: Optional[bool] = None,
-        last_text: Optional[str] = None,
-        last_time: Optional[float] = None,
-        last_error: Optional[str] = None,
-    ) -> None:
-        with self.wake_status_lock:
-            if listening is not None:
-                self.wake_status["listening"] = listening
-            if last_text is not None:
-                self.wake_status["last_text"] = last_text
-            if last_time is not None:
-                self.wake_status["last_time"] = last_time
-            if last_error is not None:
-                self.wake_status["last_error"] = last_error
-
-    def _wake_command_loop(self) -> None:
-        if not self.wake_listener or not self.stt or not self.voice_processor:
-            return
-
-        while not self.wake_stop_event.is_set():
-            if not self.wake_enabled_event.is_set():
-                self._set_wake_status(listening=False)
-                time.sleep(0.1)
-                continue
-
-            self._set_wake_status(listening=True)
-            try:
-                detected = self.wake_listener.listen_wake(stop_event=self.wake_stop_event)
-            except Exception as exc:
-                self._set_wake_status(listening=False, last_error=str(exc))
-                logger.error("Wake listener failed: %s", exc)
-                time.sleep(1.0)
-                continue
-
-            self._set_wake_status(listening=False)
-            if not detected or self.wake_stop_event.is_set():
-                continue
-
-            print("Wake detected")
-
-            if self.assistant and _env_bool("VOICE_ACKNOWLEDGE_WAKE", True):
-                self.assistant.say("Yes?")
-
-            command = self.stt.listen_command()
-            if not command:
-                continue
-
-            command = normalize(command)
-            self._set_wake_status(
-                last_text=command,
-                last_time=time.time(),
-                last_error="",
-            )
-            self.voice_processor.submit(command)
-
     def toggle_microphone(self, source: str) -> None:
-        if self.voice_ready:
-            next_state = not self.wake_enabled_event.is_set()
-            if next_state:
-                self.wake_enabled_event.set()
-            else:
-                self.wake_enabled_event.clear()
+        if self.voice_ready and self.voice_controller:
+            next_state = not self.voice_controller.mic_enabled
+            self.voice_controller.set_mic_enabled(next_state)
             state_label = "ON" if next_state else "OFF"
             logger.info("Microphone toggled %s by %s.", state_label, source)
             print(f"[Voice] Microphone toggled {state_label} ({source})")
@@ -317,35 +154,70 @@ class VoiceModule:
             )
 
     def is_mic_enabled(self) -> bool:
-        return bool(self.voice_ready and self.wake_enabled_event.is_set())
+        return bool(self.voice_ready and self.voice_controller and self.voice_controller.mic_enabled)
 
     def get_wake_status_text(self) -> str:
         if not self.voice_ready:
             return "Voice: off"
-        if not self.wake_enabled_event.is_set():
-            return "Mic: off"
-        with self.wake_status_lock:
-            if self.wake_status.get("listening"):
-                return f"Wake: listening ({self.wake_word})"
-            if self.wake_status.get("last_error"):
-                return "Wake: error"
-        return f"Wake: say {self.wake_word}"
+        return self.voice_controller.get_status_text() if self.voice_controller else "Voice: off"
 
     def get_voice_overlay(self) -> tuple[bool, str, float]:
-        with self.wake_status_lock:
-            listening = bool(self.wake_status.get("listening"))
-            last_text = str(self.wake_status.get("last_text", ""))
-            last_time = float(self.wake_status.get("last_time", 0.0))
-        return listening, last_text, last_time
+        if not self.voice_controller:
+            return False, "", 0.0
+        return (
+            self.voice_controller.listening,
+            self.voice_controller.last_heard,
+            self.voice_controller.last_heard_time,
+        )
 
     def update(self) -> Optional[str]:
+        if self.voice_controller and self.voice_processor:
+            command = self.voice_controller.get_command()
+            if command:
+                self.voice_processor.submit(command)
         if self.voice_processor and self.voice_processor.poll_should_exit():
             return "exit"
         return None
 
+    def request_control_mode(self, mode: str) -> None:
+        normalized_mode = mode.strip().lower()
+        if normalized_mode in {"head", "hand"}:
+            self._control_mode_requests.put(normalized_mode)
+
+    def get_requested_control_mode(self) -> Optional[str]:
+        try:
+            return self._control_mode_requests.get_nowait()
+        except queue.Empty:
+            return None
+
+    def set_microphone_enabled(self, enabled: bool) -> bool:
+        if not self.voice_ready or not self.voice_controller:
+            return False
+        self.voice_controller.set_mic_enabled(enabled)
+        return True
+
+    def submit_external_command(self, command: str) -> bool:
+        if not self.voice_ready or not self.voice_processor or not self.voice_controller:
+            return False
+        authorized_command = self.voice_controller.authorize_transcript(command)
+        if not authorized_command:
+            return False
+        self.voice_processor.submit(authorized_command)
+        return True
+
+    def get_runtime_status(self) -> dict:
+        return {
+            "ready": self.voice_ready,
+            "microphone_enabled": self.is_mic_enabled(),
+            "wake_word": self.wake_word,
+            "voice_status": self.get_wake_status_text(),
+            "task_status": self.voice_processor.get_status_text() if self.voice_processor else "Voice: off",
+            "microphone": self.mic_label or "System default",
+            "listening": bool(self.voice_controller and self.voice_controller.listening),
+        }
+
     def stop(self) -> None:
-        self.wake_stop_event.set()
-        if self.wake_thread:
-            self.wake_thread.join(timeout=1.5)
+        if self.voice_controller:
+            self.voice_controller.stop()
         if self.voice_processor:
             self.voice_processor.stop()

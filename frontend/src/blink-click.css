@@ -72,7 +72,7 @@ html {
   margin: 0;
   color: var(--primary-strong);
   font: 700 1.75rem/1 "Space Grotesk", sans-serif;
-  letter-spacing: -0.03em;
+  letter-spacing: 0;
   text-transform: uppercase;
 }
 
@@ -235,7 +235,7 @@ html {
 .engine-card h2 {
   margin: 0;
   font: 700 clamp(1.9rem, 4vw, 2.6rem)/1 "Space Grotesk", sans-serif;
-  letter-spacing: -0.02em;
+  letter-spacing: 0;
 }
 
 .engine-card p {
@@ -351,6 +351,7 @@ html {
 .accuracy-main > div {
   font: 700 1.9rem/1 "Space Grotesk", sans-serif;
   color: var(--primary);
+  text-transform: capitalize;
 }
 
 .accuracy-main > div span {
@@ -1727,5 +1728,26 @@ html {
 
   .control-slider {
     min-height: 10rem;
+  }
+
+  .camera-frame {
+    min-height: 16rem;
+  }
+
+  .camera-toggle,
+  .mic-toggle {
+    max-width: calc(50% - 1.2rem);
+    min-height: 2.35rem;
+    white-space: normal;
+    line-height: 1.1;
+    text-align: center;
+  }
+
+  .camera-toggle {
+    left: 0.7rem;
+  }
+
+  .mic-toggle {
+    right: 0.7rem;
   }
 }

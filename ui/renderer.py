@@ -7,8 +7,20 @@ from typing import Tuple
 import cv2
 import mediapipe as mp
 
-_DRAWING = mp.solutions.drawing_utils
-_DRAWING_STYLES = mp.solutions.drawing_styles
+_MP_SOLUTIONS = getattr(mp, "solutions", None)
+_DRAWING = _MP_SOLUTIONS.drawing_utils if _MP_SOLUTIONS else None
+_DRAWING_STYLES = _MP_SOLUTIONS.drawing_styles if _MP_SOLUTIONS else None
+_HAND_CONNECTIONS = (
+    _MP_SOLUTIONS.hands.HAND_CONNECTIONS
+    if _MP_SOLUTIONS
+    else (
+        (0, 1), (1, 2), (2, 3), (3, 4),
+        (0, 5), (5, 6), (6, 7), (7, 8),
+        (5, 9), (9, 10), (10, 11), (11, 12),
+        (9, 13), (13, 14), (14, 15), (15, 16),
+        (13, 17), (0, 17), (17, 18), (18, 19), (19, 20),
+    )
+)
 
 STOP_BUTTON_X = 14
 STOP_BUTTON_Y = 14
@@ -197,13 +209,25 @@ def draw_hand_overlay(
     hand_detected: bool,
 ) -> None:
     if landmarks is not None:
-        _DRAWING.draw_landmarks(
-            frame,
-            landmarks,
-            mp.solutions.hands.HAND_CONNECTIONS,
-            _DRAWING_STYLES.get_default_hand_landmarks_style(),
-            _DRAWING_STYLES.get_default_hand_connections_style(),
-        )
+        if _DRAWING and _DRAWING_STYLES:
+            _DRAWING.draw_landmarks(
+                frame,
+                landmarks,
+                _HAND_CONNECTIONS,
+                _DRAWING_STYLES.get_default_hand_landmarks_style(),
+                _DRAWING_STYLES.get_default_hand_connections_style(),
+            )
+        else:
+            height, width = frame.shape[:2]
+            points = [
+                (int(point.x * width), int(point.y * height))
+                for point in landmarks.landmark
+            ]
+            for start, end in _HAND_CONNECTIONS:
+                if start < len(points) and end < len(points):
+                    cv2.line(frame, points[start], points[end], (0, 210, 255), 1)
+            for point in points:
+                cv2.circle(frame, point, 2, (0, 255, 180), -1)
 
     label = f"HAND: {gesture.replace('_', ' ')}"
     cv2.rectangle(frame, (16, 82), (230, 112), (0, 0, 0), -1)

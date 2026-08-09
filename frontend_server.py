@@ -18,6 +18,7 @@ FRONTEND_DIR = ROOT_DIR / "frontend"
 DIST_DIR = FRONTEND_DIR / "dist"
 STATIC_DIR = DIST_DIR if DIST_DIR.exists() else FRONTEND_DIR
 PORT = int(os.environ.get("FRONTEND_PORT", "3000"))
+RUNTIME_PORT = int(os.environ.get("BLINK_RUNTIME_PORT", "3001"))
 STDOUT_LOG = ROOT_DIR / "frontend_server.out"
 STDERR_LOG = ROOT_DIR / "frontend_server.err"
 DEFAULT_STATUS_MESSAGE = "Launcher ready. Press Start Project to begin."
@@ -225,6 +226,34 @@ def _extract_voice_commands() -> list[dict]:
     return history
 
 
+def _runtime_request(path: str, payload: dict | None = None) -> tuple[bool, dict]:
+    if not _is_running():
+        return False, {"message": "Project is not running."}
+
+    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{RUNTIME_PORT}{path}",
+        data=data,
+        headers={"Content-Type": "application/json"} if data is not None else {},
+        method="POST" if data is not None else "GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=1.5) as response:
+            raw_body = response.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        raw_body = exc.read().decode("utf-8", errors="replace")
+    except urllib.error.URLError:
+        return False, {"message": "Project is starting. Try again in a moment."}
+
+    try:
+        body = json.loads(raw_body)
+    except json.JSONDecodeError:
+        return False, {"message": "The running project returned an invalid response."}
+    if not isinstance(body, dict):
+        return False, {"message": "The running project returned an invalid response."}
+    return bool(body.get("accepted", body.get("available", True))), body
+
+
 def _start_project() -> tuple[bool, str]:
     global _PROJECT_PROCESS, _LAST_STATUS_MESSAGE
 
@@ -248,6 +277,7 @@ def _start_project() -> tuple[bool, str]:
         # UnicodeEncodeError when no interactive UTF-8 console is attached.
         child_env.setdefault("PYTHONUTF8", "1")
         child_env.setdefault("PYTHONIOENCODING", "utf-8")
+        child_env.setdefault("BLINK_RUNTIME_PORT", str(RUNTIME_PORT))
 
         stdout_log = open(STDOUT_LOG, "w", encoding="utf-8", errors="replace")
         stderr_log = open(STDERR_LOG, "w", encoding="utf-8", errors="replace")
@@ -308,10 +338,12 @@ class FrontendHandler(SimpleHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path == "/api/status":
+            _, voice_status = _runtime_request("/health")
             self._write_json(
                 {
                     "running": _is_running(),
                     "message": _status_message(),
+                    "voice": voice_status if _is_running() else None,
                 }
             )
             return
@@ -347,6 +379,38 @@ class FrontendHandler(SimpleHTTPRequestHandler):
                     "started": started,
                     "message": message,
                 }
+            )
+            return
+
+        if self.path == "/api/microphone":
+            payload = self._read_json()
+            enabled = payload.get("enabled")
+            if not isinstance(enabled, bool):
+                self._write_json(
+                    {"message": "The enabled field must be true or false."},
+                    status=HTTPStatus.BAD_REQUEST,
+                )
+                return
+            accepted, response = _runtime_request("/microphone", {"enabled": enabled})
+            self._write_json(
+                response,
+                status=HTTPStatus.OK if accepted else HTTPStatus.SERVICE_UNAVAILABLE,
+            )
+            return
+
+        if self.path == "/api/voice-command":
+            payload = self._read_json()
+            command = str(payload.get("text", "")).strip()
+            if not command or len(command) > 600:
+                self._write_json(
+                    {"message": "A short voice command is required."},
+                    status=HTTPStatus.BAD_REQUEST,
+                )
+                return
+            accepted, response = _runtime_request("/voice-command", {"text": command})
+            self._write_json(
+                response,
+                status=HTTPStatus.ACCEPTED if accepted else HTTPStatus.SERVICE_UNAVAILABLE,
             )
             return
 

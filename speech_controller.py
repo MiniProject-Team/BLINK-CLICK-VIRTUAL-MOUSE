@@ -27,7 +27,7 @@ import urllib.parse
 import urllib.request
 import webbrowser
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import pyautogui
 
@@ -80,6 +80,7 @@ SUPPORTED_STEP_ACTIONS: tuple[str, ...] = (
     "launch_app",
     "system_search",
     "close_app",
+    "control_mode",
     "wait",
     "help",
     "stop",
@@ -87,7 +88,7 @@ SUPPORTED_STEP_ACTIONS: tuple[str, ...] = (
 )
 
 DEFAULT_WAKE_WORD = "jarvis"
-DEFAULT_COMMAND_WINDOW_S = 8.0
+DEFAULT_COMMAND_WINDOW_S = 10.0
 DEFAULT_CONFIRM_WINDOW_S = 15.0
 MAX_PLAN_STEPS = 6
 MAX_TYPE_CHARS = 400
@@ -778,6 +779,34 @@ def _plan_single_task_locally(cmd: str) -> Optional[dict[str, Any]]:
     if not text:
         return None
 
+    switch_words = ("switch", "change", "activate", "enable", "use")
+    if "hand" in text and (
+        "hand mode" in text
+        or "hand control" in text
+        or "hand tracking" in text
+        or any(word in text for word in switch_words)
+    ):
+        return _default_plan(
+            decision="allow",
+            summary="Switch to hand mode",
+            reply="Switching to hand mode.",
+            steps=[{"action": "control_mode", "mode": "hand"}],
+        )
+
+    if "head" in text and (
+        "head mode" in text
+        or "head control" in text
+        or "head tracking" in text
+        or "blink mode" in text
+        or any(word in text for word in switch_words)
+    ):
+        return _default_plan(
+            decision="allow",
+            summary="Switch to head mode",
+            reply="Switching to head and blink mode.",
+            steps=[{"action": "control_mode", "mode": "head"}],
+        )
+
     # SMART CLOSE SYSTEM
     if "close youtube" in text:
         return _default_plan(
@@ -1178,6 +1207,12 @@ def _normalize_step(step: Any) -> Optional[dict[str, Any]]:
 
     if action in {"minimize", "maximize", "restore"}:
         pass
+
+    elif action == "control_mode":
+        mode = str(step.get("mode", "")).strip().lower()
+        if mode not in {"head", "hand"}:
+            return None
+        normalized["mode"] = mode
 
     elif action == "scroll":
         direction = str(step.get("direction", "down")).strip().lower()
@@ -2028,6 +2063,7 @@ class AssistantVoice:
         self._stopped = False
         self._rate = rate
         self._volume = volume
+        self._speaking = threading.Event()
         self._thread = threading.Thread(target=self._worker, daemon=True)
         self._thread.start()
         logger.info("AssistantVoice started (rate=%d).", rate)
@@ -2041,6 +2077,7 @@ class AssistantVoice:
                 continue
 
             try:
+                self._speaking.set()
                 engine = pyttsx3.init()
                 engine.setProperty("rate", self._rate)
                 engine.setProperty("volume", self._volume)
@@ -2057,6 +2094,7 @@ class AssistantVoice:
             except Exception as exc:
                 logger.error("TTS error: %s", exc)
             finally:
+                self._speaking.clear()
                 self._q.task_done()
 
     def say(self, text: str) -> None:
@@ -2067,6 +2105,10 @@ class AssistantVoice:
 
     def greet(self) -> None:
         self.say(self.GREETING)
+
+    @property
+    def is_speaking(self) -> bool:
+        return self._speaking.is_set()
 
     def stop(self) -> None:
         self._stopped = True
@@ -2123,10 +2165,20 @@ class VoiceController:
         self.last_language = self.language
         self.command_window_s = max(2.0, float(command_window_s))
         self.acknowledge_wake = acknowledge_wake
-        self.conversation_mode_enabled = _parse_bool_env(
-            os.environ.get("VOICE_CONVERSATION_MODE"),
+        self.strict_wake_word = _parse_bool_env(
+            os.environ.get("VOICE_STRICT_WAKE_WORD"),
             True,
         )
+        self.wake_word_allow_fuzzy = _parse_bool_env(
+            os.environ.get("VOICE_WAKE_FUZZY_MATCH"),
+            False,
+        )
+        self.conversation_mode_enabled = _parse_bool_env(
+            os.environ.get("VOICE_CONVERSATION_MODE"),
+            False,
+        )
+        if self.strict_wake_word:
+            self.conversation_mode_enabled = False
         self.conversation_timeout_s = _clamp_float(
             os.environ.get(
                 "VOICE_CONVERSATION_TIMEOUT_S",
@@ -2229,7 +2281,7 @@ class VoiceController:
         )
         self.auto_mic_cycle = _parse_bool_env(
             os.environ.get("VOICE_MIC_AUTO_CYCLE"),
-            True,
+            not self.strict_wake_word,
         )
         self.mic_enabled = _parse_bool_env(
             os.environ.get("VOICE_MIC_ENABLED"),
@@ -2579,7 +2631,14 @@ class VoiceController:
     def _extract_after_wake_word(self, text: str) -> tuple[bool, str]:
         tokens = text.split()
         for index, token in enumerate(tokens):
-            allow_fuzzy = index < self.wake_word_prefix_tokens
+            if self.strict_wake_word and index:
+                prefix_tokens = tokens[:index]
+                if any(prefix not in {"hey", "ok", "okay"} for prefix in prefix_tokens):
+                    continue
+            allow_fuzzy = (
+                self.wake_word_allow_fuzzy
+                and index < self.wake_word_prefix_tokens
+            )
             if self._token_matches_wake_word(token, allow_fuzzy=allow_fuzzy):
                 remainder = tokens[index + 1 :]
                 while remainder and self._token_matches_wake_word(
@@ -2764,6 +2823,16 @@ class VoiceController:
             self.assistant.say("Yes?")
         return None
 
+    def authorize_transcript(self, text: str) -> Optional[str]:
+        """Return command text only when the transcript passes the wake gate."""
+        cleaned = _clean_voice_text(text)
+        if not cleaned:
+            return None
+        now = time.time()
+        self.last_heard = cleaned
+        self.last_heard_time = now
+        return self._consume_transcript(cleaned, now)
+
     def _listen_loop(self) -> None:
         while not self.stopped:
             try:
@@ -2786,16 +2855,20 @@ class VoiceController:
                             cycle_deadline = self._mic_cycle_deadline
 
                         if now >= cycle_deadline:
-                            self.listening = False
-                            self.awaiting_command_until = 0.0
-                            self.conversation_active_until = 0.0
-                            self.last_matched = ""
-                            if cycle_pause_until <= 0.0:
-                                self._mic_cycle_pause_until = now + self.mic_cycle_pause_s
-                                cycle_pause_until = self._mic_cycle_pause_until
-
-                            if now >= cycle_pause_until:
+                            if now < self.awaiting_command_until:
                                 self._reset_mic_cycle_locked(now)
+                                cycle_deadline = self._mic_cycle_deadline
+                            else:
+                                self.listening = False
+                                self.awaiting_command_until = 0.0
+                                self.conversation_active_until = 0.0
+                                self.last_matched = ""
+                                if cycle_pause_until <= 0.0:
+                                    self._mic_cycle_pause_until = now + self.mic_cycle_pause_s
+                                    cycle_pause_until = self._mic_cycle_pause_until
+
+                                if now >= cycle_pause_until:
+                                    self._reset_mic_cycle_locked(now)
 
                 if not mic_enabled:
                     time.sleep(0.1)
@@ -2803,6 +2876,11 @@ class VoiceController:
 
                 if auto_mic_cycle and cycle_pause_until > 0.0 and now < cycle_pause_until:
                     time.sleep(min(0.1, max(0.01, cycle_pause_until - now)))
+                    continue
+
+                if self.assistant and getattr(self.assistant, "is_speaking", False):
+                    self.listening = False
+                    time.sleep(0.1)
                     continue
 
                 self._maybe_refresh_ambient_noise(now)
@@ -2859,7 +2937,7 @@ class VoiceController:
                     if transcripts:
                         print(f"[Voice DEBUG] Alternatives: {transcripts}")
 
-                accepted = self._consume_transcript(text, now)
+                accepted = self.authorize_transcript(text)
                 logger.info("Recognised speech: '%s'", text)
                 print(f"[Voice] Heard: '{text}'")
                 if accepted:
@@ -2947,11 +3025,13 @@ class VoiceCommandProcessor:
         brain: Optional[OllamaBrain],
         cloud_brain: Optional[CloudBrain] = None,
         confirmation_timeout_s: float = DEFAULT_CONFIRM_WINDOW_S,
+        control_mode_handler: Optional[Callable[[str], None]] = None,
     ) -> None:
         self.assistant = assistant
         self.voice = voice
         self.brain = brain
         self.cloud_brain = cloud_brain
+        self.control_mode_handler = control_mode_handler
         self.confirmation_timeout_s = max(5.0, float(confirmation_timeout_s))
         self.drag_mode = False
         self.pending_plan: Optional[PendingVoicePlan] = None
@@ -3063,6 +3143,8 @@ class VoiceCommandProcessor:
             return "Right clicking."
         if action == "double_click":
             return "Double clicking."
+        if action == "control_mode":
+            return f"Switching to {first_step.get('mode', 'that')} mode."
         return cleaned_reply
 
     def _plan_completion_message(self, plan: dict[str, Any]) -> str:
@@ -3310,6 +3392,11 @@ class VoiceCommandProcessor:
                     app_name = step.get("app", "")
                     if not _close_app_by_name(app_name):
                         print(f"Failed to close {app_name}")
+
+                elif action == "control_mode":
+                    if not self.control_mode_handler:
+                        raise RuntimeError("Control mode switching is unavailable")
+                    self.control_mode_handler(step.get("mode", "head"))
 
                 elif action == "wait":
                     time.sleep(float(step.get("seconds", 1.0)))

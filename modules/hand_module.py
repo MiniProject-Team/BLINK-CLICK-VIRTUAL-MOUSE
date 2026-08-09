@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import math
+import os
+import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 import cv2
@@ -58,12 +61,40 @@ class HandGestureController:
     def __init__(self, cfg: MouseConfig) -> None:
         self.cfg = cfg
         self.screen_w, self.screen_h = pyautogui.size()
-        self._hands = mp.solutions.hands.Hands(
-            model_complexity=0,
-            max_num_hands=1,
-            min_detection_confidence=cfg.detection_confidence,
-            min_tracking_confidence=cfg.tracking_confidence,
-        )
+        self._mode = "legacy"
+        self._last_task_timestamp_ms = 0
+        if hasattr(mp, "solutions"):
+            self._hands = mp.solutions.hands.Hands(
+                model_complexity=0,
+                max_num_hands=1,
+                min_detection_confidence=cfg.detection_confidence,
+                min_tracking_confidence=cfg.tracking_confidence,
+            )
+        else:
+            model_path = Path(
+                os.environ.get(
+                    "HAND_LANDMARKER_MODEL",
+                    Path(__file__).resolve().parents[1] / "models" / "hand_landmarker.task",
+                )
+            )
+            if not model_path.is_file():
+                raise RuntimeError(f"Hand Landmarker model not found: {model_path}")
+            try:
+                from mediapipe.tasks import python as mp_python
+                from mediapipe.tasks.python import vision as mp_vision
+
+                options = mp_vision.HandLandmarkerOptions(
+                    base_options=mp_python.BaseOptions(model_asset_path=str(model_path)),
+                    running_mode=mp_vision.RunningMode.VIDEO,
+                    num_hands=1,
+                    min_hand_detection_confidence=cfg.detection_confidence,
+                    min_hand_presence_confidence=cfg.detection_confidence,
+                    min_tracking_confidence=cfg.tracking_confidence,
+                )
+                self._hands = mp_vision.HandLandmarker.create_from_options(options)
+                self._mode = "tasks"
+            except Exception as exc:
+                raise RuntimeError(f"Could not initialise MediaPipe Hand Landmarker: {exc}") from exc
         self._filter_x, self._filter_y = self._create_filters()
         self.cur_x = self.screen_w / 2
         self.cur_y = self.screen_h / 2
@@ -86,12 +117,23 @@ class HandGestureController:
 
     def process(self, frame, now: float) -> HandFrameResult:
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        result = self._hands.process(rgb)
-        if not result.multi_hand_landmarks:
+        if self._mode == "tasks":
+            image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+            timestamp_ms = max(
+                int(time.monotonic() * 1000),
+                self._last_task_timestamp_ms + 1,
+            )
+            self._last_task_timestamp_ms = timestamp_ms
+            result = self._hands.detect_for_video(image, timestamp_ms)
+            detected_hands = result.hand_landmarks
+        else:
+            result = self._hands.process(rgb)
+            detected_hands = result.multi_hand_landmarks
+        if not detected_hands:
             self._reset_runtime_state()
             return HandFrameResult(hand_detected=False)
 
-        hand_landmarks = result.multi_hand_landmarks[0]
+        hand_landmarks = detected_hands[0]
         h, w, _ = frame.shape
         metrics = self._measure_gesture(hand_landmarks, w, h)
         gesture = self._classify_gesture(metrics)
@@ -174,6 +216,12 @@ class HandGestureController:
             ratio=0.28,
             ceiling_scale=1.85,
         )
+        open_palm_release_threshold = self._adaptive_threshold(
+            self.cfg.hand_open_palm_release_px,
+            palm_span,
+            ratio=0.46,
+            ceiling_scale=2.1,
+        )
 
         pinch_distance = self._distance(thumb_tip, index_tip)
         middle_pinch_distance = self._distance(thumb_tip, middle_tip)
@@ -200,15 +248,15 @@ class HandGestureController:
         return HandGestureMetrics(
             pinch_distance=pinch_distance,
             middle_pinch_distance=middle_pinch_distance,
-            cursor_source_x=hand_center_x,
-            cursor_source_y=hand_center_y,
+            cursor_source_x=index_tip[0] / width,
+            cursor_source_y=index_tip[1] / height,
             scroll_center_y=scroll_center_y,
             open_palm=(
                 index_up
                 and middle_up
                 and ring_up
                 and pinky_up
-                and pinch_distance > self.cfg.hand_open_palm_release_px
+                and pinch_distance > open_palm_release_threshold
                 and middle_pinch_distance > right_click_threshold + 10
             ),
             left_click=pinch_distance <= left_click_threshold,
@@ -324,9 +372,12 @@ class HandGestureController:
     def _finger_is_up(hand_landmarks, tip_idx: int, pip_idx: int, axis: str) -> bool:
         tip = hand_landmarks.landmark[tip_idx]
         pip = hand_landmarks.landmark[pip_idx]
+        wrist = hand_landmarks.landmark[HandGestureController.WRIST]
+        palm = hand_landmarks.landmark[HandGestureController.MIDDLE_MCP]
+        margin = max(0.012, abs(wrist.y - palm.y) * 0.06)
         if axis == "y":
-            return tip.y < pip.y - 0.015
-        return tip.x < pip.x - 0.015
+            return tip.y < pip.y - margin
+        return tip.x < pip.x - margin
 
     @staticmethod
     def _landmark_px(hand_landmarks, idx: int, width: int, height: int) -> tuple[int, int]:

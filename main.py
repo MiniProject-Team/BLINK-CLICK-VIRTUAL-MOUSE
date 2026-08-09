@@ -23,6 +23,7 @@ import pyautogui
 from core.action_handler import ActionHandler
 from core.control_manager import ControlManager
 from core.engine import Engine
+from core.runtime_api import RuntimeCommandServer
 from core.state import SystemState
 from modules.face_module import CameraCapture, FaceModule
 from modules.hand_module import HandModule
@@ -56,7 +57,7 @@ def _print_banner(
     if voice.voice_ready:
         print(
             "  Voice In   : Active (say '"
-            f"{voice.wake_word}' to wake, vosk + google)"
+            f"{voice.wake_word}' to wake, adaptive Google recognition)"
         )
     else:
         print("  Voice In   : Disabled")
@@ -110,8 +111,31 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return default
+    return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _apply_mouse_runtime_overrides(cfg: MouseConfig) -> None:
     cfg.blink_threshold = _env_float("BLINK_THRESHOLD", cfg.blink_threshold)
+    cfg.blink_adaptive_threshold = _env_bool(
+        "BLINK_ADAPTIVE_THRESHOLD",
+        cfg.blink_adaptive_threshold,
+    )
+    cfg.blink_min_threshold = _env_float(
+        "BLINK_MIN_THRESHOLD",
+        cfg.blink_min_threshold,
+    )
+    cfg.blink_max_threshold = _env_float(
+        "BLINK_MAX_THRESHOLD",
+        cfg.blink_max_threshold,
+    )
+    cfg.blink_closed_ratio = _env_float(
+        "BLINK_CLOSED_RATIO",
+        cfg.blink_closed_ratio,
+    )
     cfg.intentional_blink_duration = _env_float(
         "INTENTIONAL_BLINK_DURATION",
         cfg.intentional_blink_duration,
@@ -122,6 +146,14 @@ def _apply_mouse_runtime_overrides(cfg: MouseConfig) -> None:
         cfg.blink_release_margin,
     )
     cfg.click_cooldown_s = _env_float("CLICK_COOLDOWN_S", cfg.click_cooldown_s)
+    cfg.head_landmark_buffer_size = _env_int(
+        "HEAD_LANDMARK_BUFFER_SIZE",
+        cfg.head_landmark_buffer_size,
+    )
+    cfg.head_landmark_outlier_limit = _env_float(
+        "HEAD_LANDMARK_OUTLIER_LIMIT",
+        cfg.head_landmark_outlier_limit,
+    )
     cfg.hand_pinch_threshold_px = _env_int(
         "HAND_PINCH_THRESHOLD_PX",
         cfg.hand_pinch_threshold_px,
@@ -228,6 +260,14 @@ def main() -> None:
     actions = ActionHandler(assistant)
     voice = VoiceModule(assistant)
     engine = Engine(face_module, hand_module, voice, actions, control, state)
+    runtime_port = _env_int("BLINK_RUNTIME_PORT", 3001)
+    runtime_api = RuntimeCommandServer(
+        port=runtime_port,
+        submit_voice_command=voice.submit_external_command,
+        set_microphone_enabled=voice.set_microphone_enabled,
+        get_status=voice.get_runtime_status,
+    )
+    runtime_api.start()
 
     click_feedback_until: float = 0.0
     click_feedback_text: str = ""
@@ -323,6 +363,9 @@ def main() -> None:
             now = time.time()
 
             output = engine.update(processing_frame, now)
+            requested_control_mode = voice.get_requested_control_mode()
+            if requested_control_mode:
+                _set_control_mode(requested_control_mode, "voice command")
 
             if output.click:
                 click_feedback_text = "LEFT CLICK" if output.click == "left" else "RIGHT CLICK"
@@ -351,7 +394,7 @@ def main() -> None:
                         renderer.draw_ear_bar(
                             frame,
                             output.face_result.avg_ear,
-                            cfg.blink_threshold,
+                            output.face_result.blink_threshold or cfg.blink_threshold,
                         )
                 else:
                     renderer.draw_no_face_warning(frame, w, h)
@@ -372,7 +415,7 @@ def main() -> None:
                     if control.is_head()
                     else "Hand  : MEDIAPIPE"
                 ),
-                f"Voice : {'ON  (vosk)' if voice.voice_ready else 'OFF'}",
+                f"Voice : {'ON  (adaptive)' if voice.voice_ready else 'OFF'}",
                 (
                     "Brain : OLLAMA+CLOUD"
                     if voice.brain and voice.cloud_brain
@@ -468,6 +511,7 @@ def main() -> None:
     if voice.voice_processor and voice.voice_processor.drag_mode:
         pyautogui.mouseUp()
     voice.stop()
+    runtime_api.stop()
     if assistant:
         assistant.stop()
     if hand_module:

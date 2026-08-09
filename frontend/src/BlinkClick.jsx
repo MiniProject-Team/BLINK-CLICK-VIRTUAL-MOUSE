@@ -17,11 +17,11 @@ const projectWorkflow = [
   },
   {
     icon: "ads_click",
-    title: "3. Eye Tracking & Cursor Movement",
-    text: "The coordinates of the eyes (or nose tracking point) are mapped to screen coordinates. Moving eyes left/right/up/down moves the cursor accordingly, and smooth tracking keeps movement stable.",
+    title: "3. Head Tracking & Cursor Movement",
+    text: "The nose tracking point is mapped to screen coordinates. Moving your head moves the cursor, while adaptive smoothing keeps movement stable.",
     points: [
-      "Moving eyes left/right/up/down moves cursor accordingly",
-      "Smooth tracking ensures stable cursor movement",
+      "Nose-tip movement controls the cursor",
+      "Median landmark filtering reduces jitter spikes",
       "Enables complete cursor control without touching any device",
     ],
   },
@@ -30,9 +30,9 @@ const projectWorkflow = [
     title: "4. Blink Detection (Click Action)",
     text: "The system calculates the Eye Aspect Ratio (EAR) to detect blinking. When eyes are open, EAR remains stable. When eyes close, EAR decreases.",
     points: [
-      "Short blink: Left click",
-      "Long blink: Right click (optional)",
-      "Mouse click actions are performed using only eye gestures",
+      "Intentional long blink: Left click",
+      "Two intentional long blinks: Right click",
+      "Adaptive EAR threshold improves reliability across lighting",
     ],
   },
   {
@@ -96,13 +96,13 @@ const calibrationStats = [
   },
   {
     label: "Eye Aspect Ratio",
-    value: "0.18 threshold",
-    note: "Blink detect baseline",
+    value: "Adaptive",
+    note: "EAR baseline tuned live",
   },
   {
-    label: "Gaze Smoothing",
-    value: "0.85",
-    note: "Cursor stabilization",
+    label: "Cursor Smoothing",
+    value: "One-Euro",
+    note: "Jitter-aware filtering",
   },
   {
     label: "Lighting",
@@ -119,14 +119,12 @@ const faceChecklist = [
 ];
 
 const voiceDefaults = [
-  "Wake word: Ashu",
-  "Auto-confirm system actions",
+  "Wake word: Jarvis",
+  "Strict wake gate: on",
+  "Confirm sensitive actions",
   "Noise suppression: medium",
   "Language: English (India)",
 ];
-
-const MIC_LISTEN_WINDOW_MS = 10000;
-const MIC_AUTO_RESTART_DELAY_MS = 900;
 
 function readJsonSafe(response) {
   return response.json().catch(() => ({}));
@@ -162,13 +160,8 @@ export default function BlinkClick() {
   const [chatStatus, setChatStatus] = useState({ state: "idle", message: "" });
   const [cameraEnabled, setCameraEnabled] = useState(true);
   const [voiceEnabled, setVoiceEnabled] = useState(true);
-  const [micListening, setMicListening] = useState(false);
   const [micStatus, setMicStatus] = useState("");
   const micStatusId = "mic-status-live";
-  const speechRef = useRef(null);
-  const micStopTimerRef = useRef(null);
-  const micRestartTimerRef = useRef(null);
-  const micPreventAutoRestartRef = useRef(false);
 
   useEffect(() => {
     let active = true;
@@ -189,6 +182,10 @@ export default function BlinkClick() {
             message: data.message || "Ready",
           });
         });
+        if (data.voice) {
+          setVoiceEnabled(Boolean(data.voice.microphone_enabled));
+          setMicStatus(data.voice.voice_status || data.voice.task_status || "");
+        }
       } catch {
         if (!active) {
           return;
@@ -322,28 +319,6 @@ export default function BlinkClick() {
   }, [status.running, cameraEnabled]);
 
   useEffect(() => {
-    if (!voiceEnabled) {
-      stopMicListening("Mic is off.", true);
-      return;
-    }
-
-    if (!status.running) {
-      stopMicListening("Project is not running. Mic idle.", true);
-      return;
-    }
-
-    if (!micListening) {
-      startMicListening("Mic listening for 10 seconds...");
-    }
-  }, [voiceEnabled, status.running, micListening]);
-
-  useEffect(() => {
-    return () => {
-      stopMicListening("", true);
-    };
-  }, []);
-
-  useEffect(() => {
     let active = true;
 
     async function pollCommands() {
@@ -443,122 +418,28 @@ export default function BlinkClick() {
     }
   }
 
-  function getSpeechRecognizer() {
-    if (speechRef.current) {
-      return speechRef.current;
-    }
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      return null;
-    }
-    const recognizer = new SpeechRecognition();
-    recognizer.lang = "en-IN";
-    recognizer.interimResults = false;
-    recognizer.continuous = false;
-    speechRef.current = recognizer;
-    return recognizer;
-  }
-
-  function clearMicTimers() {
-    if (micStopTimerRef.current) {
-      window.clearTimeout(micStopTimerRef.current);
-      micStopTimerRef.current = null;
-    }
-    if (micRestartTimerRef.current) {
-      window.clearTimeout(micRestartTimerRef.current);
-      micRestartTimerRef.current = null;
-    }
-  }
-
-  function stopMicListening(message = "Mic stopped.", preventAutoRestart = true) {
-    if (preventAutoRestart) {
-      micPreventAutoRestartRef.current = true;
-    }
-    clearMicTimers();
-
-    const recognizer = speechRef.current;
-    if (recognizer) {
-      try {
-        recognizer.onresult = null;
-        recognizer.onend = null;
-        recognizer.onerror = null;
-        recognizer.stop();
-      } catch {
-        // ignore stop errors
-      }
-    }
-    setMicListening(false);
-    if (message) {
-      setMicStatus(message);
-    }
-  }
-
-  function startMicListening(message = "Mic listening for 10 seconds...") {
-    if (!voiceEnabled || !status.running || micListening) {
+  async function handleMicToggle() {
+    if (!status.running) {
+      setMicStatus("Start the project before controlling its microphone.");
       return;
     }
 
-    const recognizer = getSpeechRecognizer();
-    if (!recognizer) {
-      setMicStatus("Speech recognition not supported in this browser.");
-      return;
-    }
-
-    clearMicTimers();
-    micPreventAutoRestartRef.current = false;
-    setMicListening(true);
-    setMicStatus(message);
-
-    recognizer.onresult = (event) => {
-      const transcript = Array.from(event.results)
-        .map((result) => result[0]?.transcript || "")
-        .join(" ")
-        .trim();
-      if (transcript) {
-        setChatInput((prev) => (prev ? `${prev} ${transcript}` : transcript));
-        setMicStatus("Captured voice input.");
-      }
-    };
-    recognizer.onerror = () => {
-      setMicStatus("Mic error. Try again.");
-      setMicListening(false);
-    };
-    recognizer.onend = () => {
-      setMicListening(false);
-
-      const blockRestart = micPreventAutoRestartRef.current || !voiceEnabled || !status.running;
-      micPreventAutoRestartRef.current = false;
-
-      if (!blockRestart) {
-        setMicStatus("Auto mode: restarting mic...");
-        micRestartTimerRef.current = window.setTimeout(() => {
-          startMicListening("Mic listening for 10 seconds...");
-        }, MIC_AUTO_RESTART_DELAY_MS);
-      }
-    };
-
+    const enabled = !voiceEnabled;
+    setMicStatus(enabled ? "Turning microphone on..." : "Turning microphone off...");
     try {
-      recognizer.start();
-      micStopTimerRef.current = window.setTimeout(() => {
-        stopMicListening("Mic auto-stopped after 10 seconds.", false);
-      }, MIC_LISTEN_WINDOW_MS);
-    } catch {
-      setMicListening(false);
-      setMicStatus("Mic could not start.");
-    }
-  }
-
-  function handleMicToggle() {
-    if (voiceEnabled) {
-      setVoiceEnabled(false);
-      stopMicListening("Mic turned off.", true);
-    } else {
-      setVoiceEnabled(true);
-      if (status.running) {
-        startMicListening("Mic listening for 10 seconds...");
-      } else {
-        setMicStatus("Mic is on. Start project to begin listening.");
+      const response = await fetch("/api/microphone", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled }),
+      });
+      const data = await readJsonSafe(response);
+      if (!response.ok) {
+        throw new Error(data.message || "Voice engine is unavailable.");
       }
+      setVoiceEnabled(Boolean(data.enabled));
+      setMicStatus(data.message || (enabled ? "Microphone on." : "Microphone off."));
+    } catch (error) {
+      setMicStatus(error?.message || "Could not update the microphone.");
     }
   }
 
@@ -636,8 +517,8 @@ export default function BlinkClick() {
             <div>
               <h2>Smart Control Engine</h2>
               <p>
-                Real-time eye tracking and blink detection are used to move the cursor and perform click actions
-                seamlessly.
+                Real-time head tracking, adaptive blink detection, hand gestures, and voice commands work together for
+                hands-free control.
               </p>
             </div>
 
@@ -661,9 +542,9 @@ export default function BlinkClick() {
 
             <div className="engine-footer">
               <div className="accuracy-main">
-                <label>Project Accuracy</label>
+                <label>Tracking Mode</label>
                 <div>
-                  98.4<span>%</span>
+                  Live<span>adaptive</span>
                 </div>
               </div>
 
@@ -672,8 +553,8 @@ export default function BlinkClick() {
                   <span className={`dot ${status.running ? "on" : status.state === "error" ? "err" : ""}`.trim()} />
                   <strong>{status.running ? "LIVE" : status.state === "error" ? "ALERT" : "READY"}</strong>
                 </div>
-                <small>Tracking Confidence: 96.9%</small>
-                <small>Blink Precision: 97.8%</small>
+                <small>Adaptive blink baseline enabled</small>
+                <small>Cursor outlier guard enabled</small>
               </div>
             </div>
           </section>
@@ -682,7 +563,7 @@ export default function BlinkClick() {
             <article className="panel">
               <div className="panel-head">
                 <div>
-                  <h3>Spatial Gaze</h3>
+                  <h3>Spatial Control</h3>
                   <p>Core control intelligence modules</p>
                 </div>
                 <span className="material-symbols-outlined">3d_rotation</span>
@@ -862,16 +743,16 @@ export default function BlinkClick() {
                   aria-label={
                     voiceEnabled
                       ? "Turn microphone off"
-                      : "Turn microphone on with automatic 10 second listening"
+                      : "Turn microphone on"
                   }
                   title={
                     voiceEnabled
                       ? "Mic is on. Click to turn off"
-                      : "Mic is off. Click to turn on auto 10 second listening"
+                      : "Mic is off. Click to turn on"
                   }
                 >
                   <span className="material-symbols-outlined">{voiceEnabled ? "mic" : "mic_off"}</span>
-                  <span>{voiceEnabled ? (micListening ? "Mic On (Auto)" : "Mic On") : "Mic Off"}</span>
+                  <span>{voiceEnabled ? "Mic On" : "Mic Off"}</span>
                 </button>
               </div>
               {micStatus ? (
@@ -979,16 +860,16 @@ export default function BlinkClick() {
                   aria-label={
                     voiceEnabled
                       ? "Turn microphone off"
-                      : "Turn microphone on with automatic 10 second listening"
+                      : "Turn microphone on"
                   }
                   title={
                     voiceEnabled
                       ? "Mic is on. Click to turn off"
-                      : "Mic is off. Click to turn on auto 10 second listening"
+                      : "Mic is off. Click to turn on"
                   }
                 >
                   <span className="material-symbols-outlined">{voiceEnabled ? "mic" : "mic_off"}</span>
-                  <span>{voiceEnabled ? (micListening ? "Mic On (Auto)" : "Mic On") : "Mic Off"}</span>
+                  <span>{voiceEnabled ? "Mic On" : "Mic Off"}</span>
                 </button>
               </div>
               <div className="voice-camera-control">
